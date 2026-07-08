@@ -2,74 +2,214 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>BOSS自动投递</title>
+  <title>JobCopilot · AI</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <div class="header"><h1>BOSS 自动投递</h1></div>
-
-  <!-- 配置 -->
-  <section class="card">
-    <div class="card-h" data-toggle="cfgBody"><span>① 配置</span><span class="chev">▾</span></div>
-    <div class="card-b" id="cfgBody">
-      <label>DeepSeek API Key</label>
-      <input type="password" id="dsKey" placeholder="sk- 开头">
-
-      <label>简历图片（投递时发给HR）</label>
-      <input type="file" id="resumeImg" accept="image/*">
-      <div id="imgPrev"></div>
-
-      <label>简历文字（必填，用于AI筛选 + 生成招呼语）</label>
-      <textarea id="resumeText" rows="5" placeholder="粘贴你的简历：技能、项目经历、教育背景、实习经历等，越详细招呼语越精准"></textarea>
-
-      <label>岗位关键词</label>
-      <input type="text" id="keyword" placeholder="如：数据分析 / AI应用">
-
-      <label>城市</label>
-      <input type="text" id="city" placeholder="如：沈阳 / 北京">
-
-      <label>收集岗位数量</label>
-      <input type="number" id="count" value="20" min="1" max="200">
-
-      <button class="btn-primary" id="saveCfg">保存配置</button>
-      <span id="saved" class="ok-msg" style="display:none">✓ 已保存</span>
-    </div>
-  </section>
-
-  <!-- 运行 -->
-  <section class="card">
-    <div class="card-h"><span>② 运行</span></div>
-    <div class="card-b">
-      <button class="btn-go" id="btnCollect">开始收集 + AI筛选</button>
-      <div class="status-row">
-        <span id="phaseText">未开始</span>
-        <span id="progText"></span>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">⚡</div>
+        <div class="logo-text">
+          <h1>JOBCOPILOT</h1>
+          <span class="subtitle">AI · 智能求职助手</span>
+        </div>
       </div>
-      <div class="ctrl">
-        <button id="btnPause" disabled>暂停</button>
-        <button id="btnStop" disabled>停止</button>
-        <button id="btnReset">重置</button>
+      <div class="header-right">
+        <div class="status-indicator">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="status-text" id="headerStatus">就绪</span>
+        </div>
       </div>
-    </div>
-  </section>
+    </header>
 
-  <!-- 审核 -->
-  <section class="card" id="reviewCard" style="display:none">
-    <div class="card-h"><span>③ 审核确认</span><span id="reviewCount"></span></div>
-    <div class="card-b">
-      <div class="review-tools">
-        <label class="mini"><input type="checkbox" id="selAll" checked> 全选匹配</label>
-        <button class="btn-go" id="btnDeliver">投递选中</button>
+    <!-- 01. 配置 -->
+    <section class="card glass">
+      <div class="card-header" data-toggle="cfgBody">
+        <div class="card-title">
+          <span class="card-num">01</span>
+          <span>系统配置</span>
+        </div>
+        <button class="btn-icon toggle-btn" title="折叠/展开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
       </div>
-      <div id="reviewList"></div>
-    </div>
-  </section>
+      <div class="card-body" id="cfgBody">
+        <div class="field-group">
+          <div class="field">
+            <label>
+              <span>API 端点</span>
+              <span class="hint-inline">OpenAI 兼容 /v1/chat/completions</span>
+            </label>
+            <input type="text" id="apiBaseUrl" placeholder="https://api.deepseek.com/v1/chat/completions">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>模型</label>
+              <input type="text" id="apiModel" placeholder="deepseek-chat">
+            </div>
+            <div class="field">
+              <label>API Key</label>
+              <input type="password" id="apiKey" placeholder="sk-...">
+            </div>
+          </div>
+        </div>
 
-  <!-- 日志 -->
-  <section class="card">
-    <div class="card-h"><span>日志</span><button class="mini-btn" id="clearLog">清空</button></div>
-    <div class="log" id="log"></div>
-  </section>
+        <div class="divider"></div>
+
+        <div class="field-group">
+          <div class="field">
+            <label>简历图片</label>
+            <div class="file-upload">
+              <input type="file" id="resumeImg" accept="image/*">
+              <div class="upload-area">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span>点击或拖拽上传</span>
+              </div>
+              <div id="imgPrev"></div>
+            </div>
+          </div>
+          <div class="field">
+            <label>简历文字 <span class="hint-inline">用于 AI 筛选 + 生成招呼语</span></label>
+            <textarea id="resumeText" rows="5" placeholder="粘贴简历:技能、项目经历、教育背景..."></textarea>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="field-group">
+          <div class="field-row">
+            <div class="field">
+              <label>关键词</label>
+              <input type="text" id="keyword" placeholder="如:数据分析 / AI应用">
+            </div>
+            <div class="field">
+              <label>城市</label>
+              <input type="text" id="city" placeholder="如:北京">
+            </div>
+            <div class="field field-narrow">
+              <label>数量</label>
+              <input type="number" id="count" value="20" min="1" max="200">
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="saveCfg">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            <span>保存配置</span>
+          </button>
+          <span id="saved" class="toast">✓ 已保存</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02. 运行 -->
+    <section class="card glass">
+      <div class="card-header">
+        <div class="card-title">
+          <span class="card-num">02</span>
+          <span>运行控制</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <button class="btn btn-go" id="btnCollect">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          <span>开始收集 + AI 筛选</span>
+        </button>
+
+        <div class="status-bar">
+          <div class="status-info">
+            <span class="status-label">STATE</span>
+            <span class="status-value" id="phaseText">待开始</span>
+          </div>
+          <div class="progress-info" id="progText"></div>
+        </div>
+
+        <div class="progress-track">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+
+        <div class="ctrl">
+          <button class="btn btn-secondary btn-sm" id="btnPause" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+            <span>暂停</span>
+          </button>
+          <button class="btn btn-danger btn-sm" id="btnStop" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="6" y="6" width="12" height="12"></rect>
+            </svg>
+            <span>停止</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="btnReset">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>重置</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03. 审核 -->
+    <section class="card glass" id="reviewCard" style="display:none">
+      <div class="card-header">
+        <div class="card-title">
+          <span class="card-num">03</span>
+          <span>审核确认</span>
+          <span class="badge" id="reviewCount"></span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="review-tools">
+          <label class="checkbox">
+            <input type="checkbox" id="selAll" checked>
+            <span>全选匹配</span>
+          </label>
+          <button class="btn btn-go btn-go-sm" id="btnDeliver">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+            <span>投递选中</span>
+          </button>
+        </div>
+        <div id="reviewList"></div>
+      </div>
+    </section>
+
+    <!-- 04. 日志 -->
+    <section class="card glass">
+      <div class="card-header">
+        <div class="card-title">
+          <span class="card-num">04</span>
+          <span>实时日志</span>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="clearLog">清空</button>
+      </div>
+      <div class="card-body">
+        <div class="log" id="log"></div>
+      </div>
+    </section>
+  </div>
 
   <script src="sidepanel.js"></script>
 </body>

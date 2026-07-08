@@ -1,0 +1,41 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node(以后引入构建工具时用)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# 本地配置(不要把 API Key、简历等敏感信息提交!)
+.env
+.env.local
+*.local
+
+# 临时调试文件
+*.log
+tmp/
+temp/
+debug/
+*.bak
+
+# Chrome 扩展本地打包(如果用到了)
+*.crx
+*.pem
+
+# Windows
+$RECYCLE.BIN/
+*.lnk

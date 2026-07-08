@@ -7,7 +7,7 @@
   "action": { "default_title": "BOSS自动投递" },
   "side_panel": { "default_path": "src/sidepanel.html" },
   "permissions": ["storage", "tabs", "scripting", "sidePanel"],
-  "host_permissions": ["*://*.zhipin.com/*", "https://api.deepseek.com/*"],
+  "host_permissions": ["*://*.zhipin.com/*", "https://api.deepseek.com/*", "*://*/*"],
   "background": { "service_worker": "src/background.js" },
   "content_scripts": [
     {

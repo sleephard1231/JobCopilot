@@ -1,7 +1,6 @@
-// ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + DeepSeek =====
+// ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + 自定义 LLM =====
 importScripts('/src/selectors.js'); // 让 SW 也能用 CITY_MAP（否则城市永远是全国）
-const DS_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions';
-const DS_MODEL = 'deepseek-chat';
+importScripts('/src/providers.js'); // 自定义 LLM 端点配置
 
 const RESUME_TEXT = ''; // 不内置任何个人简历，由用户在设置页"简历文字"填写
 
@@ -22,21 +21,26 @@ function log(text, level) { chrome.runtime.sendMessage({ type: 'LOG', text: text
 function pushPhase() { chrome.runtime.sendMessage({ type: 'PHASE', phase: state.phase }).catch(() => {}); }
 function progress(cur, total, label) { chrome.runtime.sendMessage({ type: 'PROGRESS', cur: cur, total: total, label: label || '' }).catch(() => {}); }
 async function waitIfPaused() { while (state.paused && !state.aborted) await sleep(400); }
-function getCfg() { return chrome.storage.local.get(['dsKey', 'resumeText', 'resumeImage', 'city', 'keyword', 'count']); }
+function getCfg() { return chrome.storage.local.get(['apiBaseUrl', 'apiKey', 'apiModel', 'resumeText', 'resumeImage', 'city', 'keyword', 'count']); }
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
 function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || ''); }
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
 
-// ── DeepSeek ──
-async function callDS(messages, maxTokens) {
+// ── 自定义 LLM(OpenAI 兼容协议) ──
+async function callLLM(messages, maxTokens) {
   const cfg = await getCfg();
-  if (!cfg.dsKey) throw new Error('未配置DeepSeek API Key');
-  const resp = await fetch(DS_ENDPOINT, {
+  const endpoint = (cfg.apiBaseUrl || '').trim();
+  const apiKey = (cfg.apiKey || '').trim();
+  const model = (cfg.apiModel || '').trim();
+  if (!endpoint) throw new Error('请先在配置中填写 API 端点');
+  if (!apiKey) throw new Error('请先在配置中填写 API Key');
+  if (!model) throw new Error('请先在配置中填写模型名');
+  const resp = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.dsKey },
-    body: JSON.stringify({ model: DS_MODEL, messages: messages, max_tokens: maxTokens || 500, temperature: 0.5 })
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify({ model: model, messages: messages, max_tokens: maxTokens || 500, temperature: 0.5 })
   });
-  if (!resp.ok) { const t = await resp.text().catch(() => ''); throw new Error('DeepSeek ' + resp.status + ': ' + t.slice(0, 120)); }
+  if (!resp.ok) { const t = await resp.text().catch(() => ''); throw new Error('API ' + resp.status + ': ' + t.slice(0, 200)); }
   const data = await resp.json();
   return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
 }
@@ -45,7 +49,7 @@ async function callDS(messages, maxTokens) {
 async function screenJob(cfg, job) {
   const sys = '你是资深求职助手。请完全依据下面提供的【求职者简历】，判断某个岗位是否值得该求职者投递。\n【判断标准·适中】保留(match=true)：岗位方向与求职者简历的专业/技能/经历相关，且求职者的经验年限、学历、级别够得着该岗位（不超纲）。剔除(match=false)：方向与简历明显无关；岗位要求的经验/学历/硬技能明显超出简历；岗位级别明显高于求职者当前水平。请依据简历本身判断，不要套用任何固定行业或级别。\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"reason":"一句话理由"}';
   const user = '求职者简历：\n' + resumeFull(cfg) + '\n\n待判断岗位：\n' + jobInfo(job) + '\n\n严格输出JSON。';
-  const raw = await callDS([{ role: 'system', content: sys }, { role: 'user', content: user }], 200);
+  const raw = await callLLM([{ role: 'system', content: sys }, { role: 'user', content: user }], 200);
   let p = null;
   try { p = JSON.parse(raw); } catch (e) { const m = raw && raw.match(/\{[\s\S]*\}/); if (m) { try { p = JSON.parse(m[0]); } catch (e2) {} } }
   if (!p) return { match: false, reason: 'AI解析失败' };
@@ -57,7 +61,7 @@ async function genGreetingFromJD(cfg, job, jd) {
   const sys = '你是求职者本人，在BOSS直聘给HR发招呼语。回复会原样发给HR，严禁任何注释、说明、括号备注、字数统计或引导语。\n【格式】1.开头前15字必须是"熟悉XXX、XXX"(填该JD要求且你简历具备的核心技能1-2个)。2.紧接"做过XXX"说明简历里与该岗位相关的具体项目/经历。3.全文80-120字，真诚自然。';
   const jdText = (jd && jd.trim()) ? jd.trim() : ('技能标签：' + (job.tags || []).join('、'));
   const user = '我的简历：\n' + resumeFull(cfg) + '\n\n目标岗位：' + (job.name || '') + (job.company ? ('（' + job.company + '）') : '') + '\n该岗位JD：\n' + jdText + '\n\n请按格式生成一段招呼语，开头必须"熟悉…"，直接输出招呼语本身，不要任何多余内容。';
-  const raw = await callDS([{ role: 'system', content: sys }, { role: 'user', content: user }], 300);
+  const raw = await callLLM([{ role: 'system', content: sys }, { role: 'user', content: user }], 300);
   return (raw || '').trim();
 }
 
@@ -109,7 +113,7 @@ async function runCollect() {
   state.jobs = []; state.screened = []; state.greetings = {}; state.results = [];
   state.phase = 'collecting'; pushPhase();
   const cfg = await getCfg();
-  if (!cfg.dsKey) { log('请先填写 DeepSeek API Key', 'error'); state.phase = 'idle'; pushPhase(); return; }
+  if (!cfg.apiBaseUrl || !cfg.apiKey || !cfg.apiModel) { log('请先填写 API 端点 / 模型 / Key', 'error'); state.phase = 'idle'; pushPhase(); return; }
   if (!cfg.keyword) { log('请先填写岗位关键词', 'error'); state.phase = 'idle'; pushPhase(); return; }
   if (!(cfg.resumeText || '').trim()) { log('请先在设置里填写"简历文字"（AI筛选和招呼语都需要它）', 'error'); state.phase = 'idle'; pushPhase(); return; }
 
@@ -129,7 +133,7 @@ async function runCollect() {
 
   // 筛选（并发3）
   state.phase = 'screening'; pushPhase();
-  log('AI 筛选中（DeepSeek）...');
+  log('AI 筛选中...');
   let done = 0; const total = state.jobs.length;
   progress(0, total, '筛选');
   const CONC = 3;
