@@ -26,6 +26,42 @@ function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
 function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || ''); }
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
 
+// ── 联系人级去重：精确双键（企业名 + HR 名同时完全一致才算重复）──
+// 标准化：仅去首尾空白，不做任何模糊
+function normStr(s) { return (s == null ? '' : String(s)).trim(); }
+function contactKey(company, hrName) {
+  // 用全角竖线作分隔符（业务名里几乎不会用到）
+  return normStr(company) + '｜' + normStr(hrName);
+}
+async function loadContactHistory() {
+  const d = await chrome.storage.local.get(['sentContacts']);
+  return d.sentContacts || {};
+}
+async function isContactBlocked(company, hrName) {
+  const sent = await loadContactHistory();
+  if (!Object.keys(sent).length) return { blocked: false, matchedKey: '' };
+  // 双键都得完全一致（trim 后）
+  const k = contactKey(company, hrName);
+  if (sent[k]) return { blocked: true, matchedKey: k };
+  return { blocked: false, matchedKey: '' };
+}
+async function addContactToHistory(company, hrName) {
+  const c = normStr(company);
+  const h = normStr(hrName);
+  if (!c) return; // 没企业名就跳过
+  // HR 名为空也允许写入（部分 BOSS 岗位不显示 HR），但匹配时公司相同的视为同一条目
+  const d = await chrome.storage.local.get(['sentContacts']);
+  const sent = d.sentContacts || {};
+  const key = contactKey(c, h);
+  if (!sent[key]) sent[key] = { company: c, hrName: h, count: 0, firstSentAt: 0, lastSentAt: 0 };
+  const meta = sent[key];
+  meta.count = (meta.count || 0) + 1;
+  const now = Date.now();
+  if (!meta.firstSentAt) meta.firstSentAt = now;
+  meta.lastSentAt = now;
+  await chrome.storage.local.set({ sentContacts: sent });
+}
+
 // ── 自定义 LLM(OpenAI 兼容协议) ──
 async function callLLM(messages, maxTokens) {
   const cfg = await getCfg();
@@ -148,6 +184,8 @@ async function runCollect() {
       done++; progress(done, total, '筛选');
     }));
   }
+  // 联系人级去重需要 HR 名，HR 名要等点开卡片才拿得到，所以审核阶段无法预判
+  // 投递环节会按 (公司, HR) 实时判断
   const matched = state.screened.filter(j => j.match).length;
   log('筛选完成：匹配 ' + matched + ' / ' + total, 'success');
   // 存盘：SW 可能在审核期间被浏览器回收，投递时需从存储读回
@@ -175,12 +213,24 @@ async function runDeliver(jobIds) {
     if (!job) { log('[' + (k + 1) + '/' + ids.length + '] 找不到岗位数据，跳过', 'warn'); continue; }
     log('[' + (k + 1) + '/' + ids.length + '] ' + job.name + ' - ' + (job.company || ''));
 
-    // 1. 回搜索页，点开卡片读取该岗位完整JD
+    // 1. 回搜索页，点开卡片读取该岗位完整JD + HR 名
     const tab = await ensureTab(searchUrl);
     await ensureInjected(tab.id, 'src/content-search.js');
-    log('  读取岗位JD...');
+    log('  读取岗位JD + HR...');
     const jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job });
     const jd = (jdr && jdr.jd) || '';
+    const hrName = (jdr && jdr.hrName) || '';
+    job.hrName = hrName;
+
+    // 联系人级去重：HR 名拿不到时降级到只按企业名精确比较
+    const cb = await isContactBlocked(job.company, hrName);
+    if (cb.blocked) {
+      log('  ↳ 跳过（已投过同企业 HR：' + (job.company || '') + (hrName ? ' · ' + hrName : '') + '）', 'warn');
+      state.results.push({ id: job.id, name: job.name, ok: false, msg: '已投递过同联系人' });
+      progress(k + 1, ids.length, '投递');
+      await rand(1500, 2500);
+      continue;
+    }
 
     // 2. 用【完整JD + 简历】现场生成这个岗位专属的招呼语
     log('  AI生成专属招呼语...');
@@ -199,14 +249,17 @@ async function runDeliver(jobIds) {
     await ensureInjected(tab.id, 'src/content-chat.js');
     log('  发简历图片 + 招呼语...');
     const r = await sendToTab(tab.id, { type: 'SEND_ACTIVE', image: cfg.resumeImage || '', greeting: greeting });
-    if (r && r.success) { recordOk(job); state.processed[job.id] = 1; await chrome.storage.local.set({ processed: state.processed }); log('  ✓ 投递成功', 'success'); }
+    if (r && r.success) { recordOk(job); state.processed[job.id] = 1; await chrome.storage.local.set({ processed: state.processed }); log('  ✓ 投递成功' + (job.hrName ? '（HR: ' + job.hrName + '）' : ''), 'success'); }
     else { recordFail(job, (r && r.error) || '发送失败'); log('  失败：' + (r && r.error), 'error'); }
     progress(k + 1, ids.length, '投递');
     await rand(2500, 4500);
   }
   finishDeliver();
 }
-function recordOk(job) { state.results.push({ id: job.id, name: job.name, ok: true }); }
+function recordOk(job) {
+  state.results.push({ id: job.id, name: job.name, ok: true });
+  if (job && job.company) addContactToHistory(job.company, job.hrName || '').catch(() => {});
+}
 function recordFail(job, msg) { state.results.push({ id: job.id, name: job.name, ok: false, msg: msg }); }
 function finishDeliver() {
   const ok = state.results.filter(r => r.ok).length;
@@ -223,8 +276,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PAUSE') { state.paused = true; log('已暂停', 'warn'); sendResponse({ ok: true }); return; }
   if (msg.type === 'RESUME') { state.paused = false; log('继续', 'info'); sendResponse({ ok: true }); return; }
   if (msg.type === 'STOP') { state.aborted = true; state.paused = false; log('已停止', 'warn'); state.phase = 'idle'; pushPhase(); sendResponse({ ok: true }); return; }
-  if (msg.type === 'RESET') { state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空已投记录）', 'warn'); sendResponse({ ok: true }); return; }
+  if (msg.type === 'RESET') { state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空本轮已投记录；企业去重记录保留）', 'warn'); sendResponse({ ok: true }); return; }
   if (msg.type === 'GET_STATE') { sendResponse({ phase: state.phase, screened: state.screened }); return; }
+  // ── 联系人去重消息 ──
+  if (msg.type === 'CLEAR_COMPANIES') {
+    chrome.storage.local.set({ sentContacts: {} }, () => {
+      log('已清空联系人去重记录', 'warn');
+      chrome.runtime.sendMessage({ type: 'COMPANIES_UPDATED' }).catch(() => {});
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+  if (msg.type === 'GET_COMPANIES') {
+    chrome.storage.local.get(['sentContacts']).then(d => {
+      const sent = d.sentContacts || {};
+      const list = Object.keys(sent).map(k => {
+        const v = sent[k];
+        return { key: k, company: v.company || k, hrName: v.hrName || '', count: v.count || 0, lastSentAt: v.lastSentAt || 0 };
+      });
+      list.sort((a, b) => (b.lastSentAt || 0) - (a.lastSentAt || 0));
+      sendResponse({ ok: true, count: list.length, list: list });
+    });
+    return true;
+  }
 });
 
 chrome.storage.local.get('processed').then(r => { if (r.processed) state.processed = r.processed; });

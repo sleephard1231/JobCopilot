@@ -7,7 +7,6 @@
 </head>
 <body>
   <div class="app">
-    <!-- Header -->
     <header class="header">
       <div class="logo">
         <div class="logo-icon">⚡</div>
@@ -24,7 +23,6 @@
       </div>
     </header>
 
-    <!-- 01. 配置 -->
     <section class="card glass">
       <div class="card-header" data-toggle="cfgBody">
         <div class="card-title">
@@ -32,9 +30,7 @@
           <span>系统配置</span>
         </div>
         <button class="btn-icon toggle-btn" title="折叠/展开">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </button>
       </div>
       <div class="card-body" id="cfgBody">
@@ -47,30 +43,18 @@
             <input type="text" id="apiBaseUrl" placeholder="https://api.deepseek.com/v1/chat/completions">
           </div>
           <div class="field-row">
-            <div class="field">
-              <label>模型</label>
-              <input type="text" id="apiModel" placeholder="deepseek-chat">
-            </div>
-            <div class="field">
-              <label>API Key</label>
-              <input type="password" id="apiKey" placeholder="sk-...">
-            </div>
+            <div class="field"><label>模型</label><input type="text" id="apiModel" placeholder="deepseek-chat"></div>
+            <div class="field"><label>API Key</label><input type="password" id="apiKey" placeholder="sk-..."></div>
           </div>
         </div>
-
         <div class="divider"></div>
-
         <div class="field-group">
           <div class="field">
             <label>简历图片</label>
             <div class="file-upload">
               <input type="file" id="resumeImg" accept="image/*">
               <div class="upload-area">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="17 8 12 3 7 8"></polyline>
-                  <line x1="12" y1="3" x2="12" y2="15"></line>
-                </svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <span>点击或拖拽上传</span>
               </div>
               <div id="imgPrev"></div>
@@ -81,33 +65,17 @@
             <textarea id="resumeText" rows="5" placeholder="粘贴简历:技能、项目经历、教育背景..."></textarea>
           </div>
         </div>
-
         <div class="divider"></div>
-
         <div class="field-group">
           <div class="field-row">
-            <div class="field">
-              <label>关键词</label>
-              <input type="text" id="keyword" placeholder="如:数据分析 / AI应用">
-            </div>
-            <div class="field">
-              <label>城市</label>
-              <input type="text" id="city" placeholder="如:北京">
-            </div>
-            <div class="field field-narrow">
-              <label>数量</label>
-              <input type="number" id="count" value="20" min="1" max="200">
-            </div>
+            <div class="field"><label>关键词</label><input type="text" id="keyword" placeholder="如:数据分析 / AI应用"></div>
+            <div class="field"><label>城市</label><input type="text" id="city" placeholder="如:北京"></div>
+            <div class="field field-narrow"><label>数量</label><input type="number" id="count" value="20" min="1" max="200"></div>
           </div>
         </div>
-
         <div class="actions">
           <button class="btn btn-primary" id="saveCfg">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-              <polyline points="17 21 17 13 7 13 7 21"></polyline>
-              <polyline points="7 3 7 8 15 8"></polyline>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
             <span>保存配置</span>
           </button>
           <span id="saved" class="toast">✓ 已保存</span>
@@ -115,7 +83,6 @@
       </div>
     </section>
 
-    <!-- 02. 运行 -->
     <section class="card glass">
       <div class="card-header">
         <div class="card-title">
@@ -125,12 +92,9 @@
       </div>
       <div class="card-body">
         <button class="btn btn-go" id="btnCollect">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
           <span>开始收集 + AI 筛选</span>
         </button>
-
         <div class="status-bar">
           <div class="status-info">
             <span class="status-label">STATE</span>
@@ -138,38 +102,26 @@
           </div>
           <div class="progress-info" id="progText"></div>
         </div>
-
         <div class="progress-track">
           <div class="progress-bar" id="progressBar"></div>
         </div>
-
         <div class="ctrl">
           <button class="btn btn-secondary btn-sm" id="btnPause" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="6" y="4" width="4" height="16"></rect>
-              <rect x="14" y="4" width="4" height="16"></rect>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
             <span>暂停</span>
           </button>
           <button class="btn btn-danger btn-sm" id="btnStop" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="6" y="6" width="12" height="12"></rect>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"></rect></svg>
             <span>停止</span>
           </button>
           <button class="btn btn-ghost btn-sm" id="btnReset">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
             <span>重置</span>
           </button>
         </div>
       </div>
     </section>
 
-    <!-- 03. 审核 -->
     <section class="card glass" id="reviewCard" style="display:none">
       <div class="card-header">
         <div class="card-title">
@@ -185,10 +137,7 @@
             <span>全选匹配</span>
           </label>
           <button class="btn btn-go btn-go-sm" id="btnDeliver">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="22" y1="2" x2="11" y2="13"></line>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
             <span>投递选中</span>
           </button>
         </div>
@@ -196,7 +145,6 @@
       </div>
     </section>
 
-    <!-- 04. 日志 -->
     <section class="card glass">
       <div class="card-header">
         <div class="card-title">
@@ -207,6 +155,44 @@
       </div>
       <div class="card-body">
         <div class="log" id="log"></div>
+      </div>
+    </section>
+
+    <section class="card glass">
+      <div class="card-header" data-toggle="companiesBody">
+        <div class="card-title">
+          <span class="card-num">05</span>
+          <span>已投递企业</span>
+          <span class="badge" id="companiesCount">0</span>
+        </div>
+        <button class="btn-icon toggle-btn" title="折叠/展开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+      </div>
+      <div class="card-body" id="companiesBody">
+        <div class="hint" style="margin-bottom:10px;color:var(--text-secondary);font-size:12px;line-height:1.6">
+          自动跳过同企业 + 同 HR 的岗位（双键精确匹配）。投递成功时自动累积，列表实时同步。
+        </div>
+        <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+          <button class="btn btn-ghost btn-sm" id="btnClearCompanies">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
+            <span>清空记录</span>
+          </button>
+        </div>
+        <div class="divider" style="margin:12px 0"></div>
+        <div class="field-label">备份与恢复</div>
+        <div class="actions" style="margin-top:8px;flex-wrap:wrap;gap:8px">
+          <button class="btn btn-ghost btn-sm" id="btnExportCompanies">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <span>导出 JSON</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="btnImportCompanies">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span>导入 JSON</span>
+          </button>
+          <input type="file" id="importFileInput" accept="application/json,.json" style="display:none">
+        </div>
+        <div id="companiesList" class="companies-list"></div>
       </div>
     </section>
   </div>

@@ -152,6 +152,143 @@ function esc(s) {
   return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+// ===== 已投递企业面板 =====
+function refreshCompanies() {
+  chrome.runtime.sendMessage({ type: 'GET_COMPANIES' }, (resp) => {
+    if (!resp || !resp.ok) return;
+    $('companiesCount').textContent = String(resp.count || 0);
+    const list = resp.list || [];
+    if (!list.length) {
+      $('companiesList').innerHTML = '<div class="companies-empty">暂无记录。投递成功后会自动累积在此。</div>';
+      return;
+    }
+    let html = '<div class="companies-summary">共 ' + list.length + ' 位已投递联系人</div>';
+    html += '<div class="companies-scroll">';
+    for (const c of list.slice(0, 200)) {
+      const last = c.lastSentAt ? new Date(c.lastSentAt).toLocaleDateString() : '';
+      const hrTxt = c.hrName ? '<span class="co-hr">' + esc(c.hrName) + '</span>' : '<span class="co-hr empty">未识别 HR</span>';
+      html += '<div class="co-row">'
+        + '<span class="co-name">' + esc(c.company) + '</span>'
+        + hrTxt
+        + '<span class="co-meta">×' + (c.count || 1) + (last ? ' · ' + last : '') + '</span>'
+        + '</div>';
+    }
+    if (list.length > 200) html += '<div class="companies-empty">仅显示前 200 条</div>';
+    html += '</div>';
+    $('companiesList').innerHTML = html;
+  });
+}
+
+$('btnClearCompanies').addEventListener('click', () => {
+  const total = ($('companiesCount').textContent || '0');
+  if (!parseInt(total)) { addLog('当前无企业记录', 'warn'); return; }
+  if (!confirm('确认清空已投递企业记录？清空后下次收集就不会再过滤这些企业。')) return;
+  chrome.runtime.sendMessage({ type: 'CLEAR_COMPANIES' }, (resp) => {
+    if (resp && resp.ok) { addLog('✓ 已清空企业记录', 'warn'); refreshCompanies(); }
+  });
+});
+
+// 初次载入列表
+refreshCompanies();
+
+// ===== 导出 / 导入 JSON =====
+function downloadJSON(obj, filename) {
+  const text = JSON.stringify(obj, null, 2);
+  // 加 BOM 让 Windows 记事本也能正确显示中文
+  const blob = new Blob(['﻿' + text], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+}
+
+$('btnExportCompanies').addEventListener('click', () => {
+  const total = parseInt($('companiesCount').textContent || '0');
+  if (!total) { addLog('当前无联系人记录可导出', 'warn'); return; }
+  chrome.storage.local.get(['sentContacts'], (d) => {
+    const payload = {
+      _type: 'JobCopilot.Contacts',
+      _version: 1,
+      _exportedAt: new Date().toISOString(),
+      sentContacts: d.sentContacts || {}
+    };
+    const name = 'jobcopilot-contacts-' + new Date().toISOString().slice(0, 10) + '.json';
+    downloadJSON(payload, name);
+    addLog('✓ 已导出 ' + Object.keys(payload.sentContacts).length + ' 位联系人 → ' + name, 'success');
+  });
+});
+
+$('btnImportCompanies').addEventListener('click', () => { $('importFileInput').click(); });
+
+$('importFileInput').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // 清空以允许重复选择同名文件
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { addLog('✗ 文件过大（>5MB），已拒绝', 'error'); return; }
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    let data;
+    try { data = JSON.parse(ev.target.result); }
+    catch (err) { addLog('✗ JSON 解析失败：' + err.message, 'error'); return; }
+    if (!data || typeof data !== 'object') { addLog('✗ 文件内容不是 JSON 对象', 'error'); return; }
+    if (data._type && data._type !== 'JobCopilot.Contacts') {
+      addLog('✗ 文件类型不匹配（期望 JobCopilot.Contacts）', 'error'); return;
+    }
+    const incoming = data.sentContacts;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+      addLog('✗ sentContacts 字段缺失或格式错误', 'error'); return;
+    }
+    // 校验每个条目结构
+    for (const k of Object.keys(incoming)) {
+      const v = incoming[k];
+      if (!v || typeof v !== 'object' || typeof v.count !== 'number') {
+        addLog('✗ 条目 "' + k + '" 格式错误，已中止', 'error'); return;
+      }
+    }
+    // 合并策略：提示用户
+    const current = parseInt($('companiesCount').textContent || '0');
+    const incomingCount = Object.keys(incoming).length;
+    let action;
+    if (current === 0) action = '直接导入';
+    else action = '合并（保留现有 + 添加新条目，已存在的 count 取较大值）';
+    if (!confirm('检测到 ' + incomingCount + ' 位联系人。\n当前已有 ' + current + ' 位。\n\n点击"确定"将' + action + '。\n点击"取消"放弃。')) return;
+
+    chrome.storage.local.get(['sentContacts'], (cur) => {
+      const merged = cur.sentContacts || {};
+      let addedNew = 0, updated = 0, kept = 0;
+      const now = Date.now();
+      for (const k of Object.keys(incoming)) {
+        const inc = incoming[k];
+        if (!merged[k]) {
+          merged[k] = {
+            company: inc.company || k,
+            hrName: inc.hrName || '',
+            count: inc.count || 1,
+            firstSentAt: inc.firstSentAt || now,
+            lastSentAt: inc.lastSentAt || now
+          };
+          addedNew++;
+        } else {
+          const cur2 = merged[k];
+          if ((inc.count || 0) > (cur2.count || 0)) { cur2.count = inc.count; updated++; }
+          if ((inc.lastSentAt || 0) > (cur2.lastSentAt || 0)) cur2.lastSentAt = inc.lastSentAt;
+          if (!cur2.firstSentAt || (inc.firstSentAt && inc.firstSentAt < cur2.firstSentAt)) cur2.firstSentAt = inc.firstSentAt;
+          kept++;
+        }
+      }
+      chrome.storage.local.set({ sentContacts: merged }, () => {
+        addLog('✓ 导入完成：新增 ' + addedNew + ' | 更新 ' + updated + ' | 已有 ' + kept + ' | 合计 ' + Object.keys(merged).length, 'success');
+        refreshCompanies();
+      });
+    });
+  };
+  reader.onerror = () => addLog('✗ 文件读取失败', 'error');
+  reader.readAsText(file, 'utf-8');
+});
+
 // ===== 消息接收 =====
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'LOG') addLog(msg.text, msg.level);
@@ -179,6 +316,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
   }
   if (msg.type === 'SCREENED') renderReview(msg.screened);
+  if (msg.type === 'COMPANIES_UPDATED') refreshCompanies();
   if (msg.type === 'DONE') {
     setRunning(false);
     $('progText').textContent = '';

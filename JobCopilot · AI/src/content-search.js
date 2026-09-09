@@ -82,7 +82,7 @@
     });
   }
 
-  // 点开卡片 → 抓取右侧详情面板的完整JD
+  // 点开卡片 → 抓取右侧详情面板的完整JD + HR名
   async function openJD(job) {
     const card = findCardByJob(job);
     if (!card) return { success: false, error: '未找到岗位卡片' };
@@ -97,7 +97,28 @@
       const secs = document.querySelectorAll('.job-sec-text, [class*="job-sec"], [class*="job-desc"]');
       jd = Array.from(secs).map(s => (s.innerText || '').trim()).filter(Boolean).join('\n');
     }
-    return { success: true, jd: jd.slice(0, 1800) };
+    // 抓取 HR 名（精确去重需要）
+    let hrName = '';
+    const hrCandidates = document.querySelectorAll(
+      '.job-detail-box [class*="hr-name"], .job-detail-box [class*="boss-name"], ' +
+      '.job-detail [class*="hr-name"], [class*="job-banner"] [class*="name"], ' +
+      '.boss-info .name, [class*="hr-info"] [class*="name"], ' +
+      '.job-detail-box .name, .job-detail .name'
+    );
+    for (const el of hrCandidates) {
+      const t = (el.textContent || '').trim();
+      if (t && t.length <= 20) { hrName = t; break; }
+    }
+    // 兜底：详情面板前 3 行文本里挑短的那行作为 HR
+    if (!hrName && det) {
+      const lines = (det.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+      for (const ln of lines) {
+        if (ln.length >= 2 && ln.length <= 8 && !/公司|有限|股份|集团|科技|网络|经验|学历|薪资|岗位/.test(ln)) { hrName = ln; break; }
+      }
+    }
+    // 去掉"先生/女士"等称谓，保证匹配键一致
+    hrName = hrName.replace(/\s*(先生|女士|老师|sir|mr|ms)\s*$/i, '').trim();
+    return { success: true, jd: jd.slice(0, 1800), hrName: hrName };
   }
 
   // 卡片已打开 → 点立即沟通 → 弹窗点"继续沟通"（跳转聊天页）

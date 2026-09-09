@@ -750,3 +750,140 @@ textarea {
 @media (max-width: 400px) {
   .field-row { grid-template-columns: 1fr; }
 }
+
+/* ===== Job Item: 已投递过该公司（置灰） ===== */
+.job-item.applied {
+  opacity: 0.45;
+  background: var(--bg-input);
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, 0.3);
+  cursor: not-allowed;
+}
+.job-item.applied:hover {
+  transform: none;
+  border-color: rgba(245, 158, 11, 0.5);
+  background: var(--bg-input);
+}
+.job-item.applied input[type=checkbox] {
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+.job-item.applied .job-title { color: var(--text-muted); text-decoration: line-through; text-decoration-color: rgba(245, 158, 11, 0.5); }
+.job-reason.applied {
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* ===== Companies Panel (05) ===== */
+.field-label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.radio-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.radio input[type=radio] {
+  accent-color: var(--accent-cyan);
+  cursor: pointer;
+  width: 13px; height: 13px;
+}
+.radio:hover { color: var(--text-primary); }
+
+.companies-list { margin-top: 12px; }
+.companies-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+  padding: 14px;
+  background: var(--bg-input);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  line-height: 1.6;
+}
+.companies-summary {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.companies-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  padding: 4px 0;
+}
+.co-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+  gap: 8px;
+}
+.co-row:last-child { border-bottom: none; }
+.co-row:hover { background: rgba(6, 182, 212, 0.04); }
+.co-name {
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.co-hr {
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.2);
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin: 0 6px;
+}
+.co-hr.empty {
+  color: var(--text-muted);
+  background: transparent;
+  border-style: dashed;
+  font-style: italic;
+}
+.co-meta {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.badge {
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border-default);
+  font-weight: 600;
+}
