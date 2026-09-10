@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 JobCopilot · AI 求职智能体
+# 🤖 小北智能招聘
 
 **基于 LLM 的智能求职助手：AI 岗位匹配 + 千岗千面招呼语 + 自动投递**
 
