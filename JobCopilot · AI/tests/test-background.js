@@ -26,6 +26,7 @@ function setup(opts) {
   const chrome = makeChrome({
     chatUrl: 'https://www.zhipin.com/web/geek/chat/1001',
     contentHandler: (tabId, msg) => {
+      if (msg.type === 'PING') return { success: true, alive: true };
       if (msg.type === 'SCRAPE') return { success: true, jobs: opts.jobs || JOBS5 };
       if (msg.type === 'OPEN_JD') {
         const custom = (opts.openJdByJob || {})[msg.job.id] || {};

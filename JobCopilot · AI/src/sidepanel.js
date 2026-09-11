@@ -1,6 +1,6 @@
 // ===== 小北智能招聘 侧边栏(自定义 LLM + 科技风 UI) =====
 const $ = (id) => document.getElementById(id);
-const CFG_FIELDS = ['apiBaseUrl', 'apiModel', 'apiKey', 'resumeText', 'keyword', 'city', 'count'];
+const CFG_FIELDS = ['apiBaseUrl', 'apiModel', 'apiKey', 'resumeText', 'greetingTemplate', 'keyword', 'city', 'count'];
 // 服务商预设：选一个自动填接口地址 + 模型（key 需用户自备，OpenCode 内置）
 const PRESETS = {
   opencode: { label: 'OpenCode', url: 'https://opencode.ai/zen/go/v1/chat/completions', model: 'deepseek-v4-flash', builtinKey: true },
@@ -16,9 +16,10 @@ const PRESET = PRESETS[DEFAULT_PRESET_ID];
 if (chrome.runtime.getManifest) $('appVersion').textContent = 'v' + chrome.runtime.getManifest().version;
 
 // ===== 折叠 =====
-document.querySelectorAll('.card-header[data-toggle]').forEach(h => {
+document.querySelectorAll('[data-toggle]').forEach(h => {
   h.addEventListener('click', () => {
     const body = $(h.dataset.toggle);
+    if (!body) return;
     const isHidden = body.style.display === 'none';
     body.style.display = isHidden ? 'flex' : 'none';
     const icon = h.querySelector('.btn-icon svg');
@@ -26,26 +27,85 @@ document.querySelectorAll('.card-header[data-toggle]').forEach(h => {
   });
 });
 
-// ===== 载入配置(兼容旧 dsKey) =====
-chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage', 'dsKey', 'presetMigrated']), (d) => {
+// ===== 步骤条：1 收集筛选 → 2 审核 → 3 投递 =====
+function setStep(n) {
+  document.querySelectorAll('.step').forEach(el => {
+    const i = parseInt(el.dataset.step, 10) || 0;
+    el.classList.toggle('active', i === n);
+    el.classList.toggle('done', i < n);
+  });
+}
+
+// ===== 折叠卡片摘要：不用展开也能看到当前配置 =====
+function refreshCardSummary() {
+  const cfgSub = $('cfgSub');
+  if (cfgSub) {
+    const model = ($('apiModel') && $('apiModel').value || '').trim();
+    const kw = ($('keyword') && $('keyword').value || '').trim();
+    cfgSub.textContent = (model || '未配置模型') + (kw ? ' · 找「' + kw + '」' : ' · 未设关键词');
+  }
+  const filterSub = $('filterSub');
+  if (!filterSub) return;
+  let n = 0;
+  try {
+    const c = collectFilterCfg();
+    if (c.listMode !== 'off') n++;
+    if (c.salary.min > 0 || c.salary.max > 0) n++;
+    if (c.cities) n++;
+    if (c.addrExclude) n++;
+    if (c.active.online || c.active.week || c.active.month) n++;
+    if (c.inviteMax > 0) n++;
+    if (c.kwMode !== 'off') n++;
+    if (c.skipUsdFund || c.fundMin > 0) n++;
+    if (c.commute && c.commute.enabled) n++;
+  } catch (e) {}
+  filterSub.textContent = n ? ('已启用 ' + n + ' 项规则 · 零成本预筛') : 'AI 之前提前排除，零成本';
+}
+
+// ===== 载入配置 =====
+// 配置版本迁移链：每条迁移只执行一次（记入 storage 的 migrations），以后升级配置不再写散装代码
+const MIGRATIONS = [
+  {
+    id: 'legacy-dskey-to-preset',
+    gate: d => !d.presetMigrated, // 旧版一次性开关：迁移过的用户不再重复执行
+    when: d => d.apiBaseUrl === 'https://api.deepseek.com/v1/chat/completions' && (d.apiModel || 'deepseek-chat') === 'deepseek-chat',
+    run: () => applyPreset(true, '✓ 检测到旧版 DeepSeek 默认配置，已自动切换到内置预设（OpenCode · DeepSeek V4 Flash）')
+  }
+];
+
+function runMigrations(d) {
+  const done = d.migrations || {};
+  let dirty = false;
+  for (const m of MIGRATIONS) {
+    if (done[m.id]) continue;
+    if (m.gate && !m.gate(d)) continue;
+    try {
+      if (m.when(d)) { m.run(); done[m.id] = true; dirty = true; }
+    } catch (e) { if (typeof addLog === 'function') addLog('✗ 配置迁移失败：' + m.id + ' ' + e.message, 'error'); }
+  }
+  const obj = {};
+  if (dirty) obj.migrations = done;
+  if (!d.presetMigrated) obj.presetMigrated = true;
+  if (Object.keys(obj).length) chrome.storage.local.set(obj);
+}
+
+chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage', 'dsKey', 'presetMigrated', 'migrations']), (d) => {
   const apiKey = d.apiKey || d.dsKey || '';
   CFG_FIELDS.forEach(f => {
     const v = f === 'apiKey' ? apiKey : d[f];
     if (v !== undefined && $(f)) $(f).value = v;
   });
-  // 旧版默认配置（deepseek.com + deepseek-chat）一次性迁移到内置预设。
-  // 只迁移一次：避免用户后来主动选择 DeepSeek 预设时又被覆盖回 OpenCode。
-  const legacyDeepSeek = d.apiBaseUrl === 'https://api.deepseek.com/v1/chat/completions' && (d.apiModel || 'deepseek-chat') === 'deepseek-chat';
-  if (!d.presetMigrated && legacyDeepSeek) {
-    applyPreset(true, '✓ 检测到旧版 DeepSeek 默认配置，已自动切换到内置预设（OpenCode · DeepSeek V4 Flash）');
-  }
-  if (!d.presetMigrated) chrome.storage.local.set({ presetMigrated: true });
+  // 旧版默认配置（deepseek.com + deepseek-chat）按迁移链升级到当前默认
+  runMigrations(d);
   // 默认值,方便新用户上手
   if (!$('apiBaseUrl').value) $('apiBaseUrl').value = PRESET.url;
   if (!$('apiModel').value) $('apiModel').value = PRESET.model;
   if (!$('apiKey').value) $('apiKey').value = typeof __OPENCODE_API_KEY__ !== 'undefined' ? __OPENCODE_API_KEY__ : '';
   syncPresetSelect();
   if (d.resumeImage) showImg(d.resumeImage);
+  // 高德 Key 预设：面板通勤 Key 为空且 secrets.js 提供了 __AMAP_KEY__ 时自动预填
+  if (!$('commuteKey').value && typeof __AMAP_KEY__ !== 'undefined' && __AMAP_KEY__) $('commuteKey').value = __AMAP_KEY__;
+  refreshCardSummary();
 });
 
 function syncPresetSelect() {
@@ -91,6 +151,26 @@ function showImg(dataUrl) {
   $('imgPrev').innerHTML = '<img src="' + dataUrl + '" alt="简历预览">';
 }
 
+// ── 自定义接口域名授权：manifest 已收紧 host_permissions，非白名单端点需动态授权 ──
+function endpointOrigin(url) {
+  try { const u = new URL(String(url || '').trim()); return (u.protocol === 'https:' || u.protocol === 'http:') ? u.origin : ''; }
+  catch (e) { return ''; }
+}
+async function ensureEndpointPermission() {
+  const origin = endpointOrigin($('apiBaseUrl').value);
+  if (!origin) return true;
+  // 测试环境/旧内核没有 permissions API 时静默跳过
+  if (typeof chrome.permissions === 'undefined' || !chrome.permissions.request || !chrome.permissions.contains) return true;
+  const pat = origin + '/*';
+  try {
+    const has = await chrome.permissions.contains({ origins: [pat] });
+    if (has) return true;
+    const ok = await chrome.permissions.request({ origins: [pat] });
+    if (!ok) addLog('⚠ 未授权接口域名 ' + origin + '，AI 调用可能失败', 'warn');
+    return !!ok;
+  } catch (e) { addLog('⚠ 域名授权请求失败：' + e.message, 'warn'); return false; }
+}
+
 $('resumeImg').addEventListener('change', (e) => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
@@ -101,14 +181,16 @@ $('resumeImg').addEventListener('change', (e) => {
   reader.readAsDataURL(file);
 });
 
-$('saveCfg').addEventListener('click', () => {
+$('saveCfg').addEventListener('click', async () => {
   const obj = {};
   CFG_FIELDS.forEach(f => { obj[f] = $(f).value; });
+  await ensureEndpointPermission();
   chrome.storage.local.set(obj, () => {
     const s = $('saved');
     s.classList.add('show');
     setTimeout(() => s.classList.remove('show'), 1500);
     addLog('✓ 配置已保存', 'success');
+    refreshCardSummary();
   });
 });
 
@@ -137,8 +219,32 @@ function collectFilterCfg() {
     keywords: $('fKeywords').value,
     skipUsdFund: $('skipUsdFund').checked,
     fundMin: parseInt($('fundMin').value, 10) || 0,
+    commute: collectCommuteCfg(),
     jobHandle: jh ? jh.value : 'skip'
   };
+}
+
+function collectCommuteCfg() {
+  return {
+    enabled: !!($('commuteOn') && $('commuteOn').checked),
+    key: ($('commuteKey').value || '').trim(),
+    origin: ($('commuteOrigin').value || '').trim(),
+    driveMaxKm: parseInt($('driveMaxKm').value, 10) || 0,
+    driveMaxMin: parseInt($('driveMaxMin').value, 10) || 0,
+    walkMaxKm: parseInt($('walkMaxKm').value, 10) || 0,
+    walkMaxMin: parseInt($('walkMaxMin').value, 10) || 0
+  };
+}
+
+function applyCommuteCfgToUI(cm) {
+  cm = cm || {};
+  if ($('commuteOn')) $('commuteOn').checked = !!cm.enabled;
+  $('commuteKey').value = cm.key || '';
+  $('commuteOrigin').value = cm.origin || '';
+  $('driveMaxKm').value = cm.driveMaxKm > 0 ? cm.driveMaxKm : '';
+  $('driveMaxMin').value = cm.driveMaxMin > 0 ? cm.driveMaxMin : '';
+  $('walkMaxKm').value = cm.walkMaxKm > 0 ? cm.walkMaxKm : '';
+  $('walkMaxMin').value = cm.walkMaxMin > 0 ? cm.walkMaxMin : '';
 }
 
 function applyFilterCfgToUI(c) {
@@ -163,6 +269,7 @@ function applyFilterCfgToUI(c) {
   $('fKeywords').value = Array.isArray(c.keywords) ? c.keywords.join(', ') : (c.keywords || '');
   $('skipUsdFund').checked = !!c.skipUsdFund;
   $('fundMin').value = c.fundMin > 0 ? c.fundMin : '';
+  applyCommuteCfgToUI(c.commute);
 }
 
 function saveFilterCfg(showToast) {
@@ -173,6 +280,7 @@ function saveFilterCfg(showToast) {
         s.classList.add('show');
         setTimeout(() => s.classList.remove('show'), 1500);
       }
+      refreshCardSummary();
       res();
     });
   });
@@ -188,7 +296,12 @@ $('btnDryRun').addEventListener('click', async () => {
   });
 });
 
-chrome.storage.local.get('filterConfig').then(d => applyFilterCfgToUI(d.filterConfig));
+chrome.storage.local.get('filterConfig').then(d => { applyFilterCfgToUI(d.filterConfig); refreshCardSummary(); });
+
+// 配置/规则改动时同步折叠摘要
+['apiModel', 'keyword'].forEach(id => { const el = $(id); if (el) el.addEventListener('input', refreshCardSummary); });
+const filterBodyEl = $('filterBody');
+if (filterBodyEl) filterBodyEl.addEventListener('change', refreshCardSummary);
 
 // ===== 运行控制 =====
 let isPaused = false;
@@ -206,6 +319,7 @@ $('btnCollect').addEventListener('click', async () => {
   if (!$('apiKey').value.trim()) return addLog('✗ 请填写 API Key', 'error');
   if (!$('keyword').value.trim()) return addLog('✗ 请填写岗位关键词', 'error');
   $('reviewCard').style.display = 'none';
+  setStep(1);
   setRunning(true);
   chrome.runtime.sendMessage({ type: 'START_COLLECT' }, (resp) => { if (resp && resp.ok === false) setRunning(false); });
 });
@@ -214,6 +328,7 @@ $('btnDeliver').addEventListener('click', () => {
   if (!guardAlive()) return;
   const ids = Array.from(document.querySelectorAll('.job-item:not(.skip) input:checked')).map(c => c.dataset.id);
   if (!ids.length) return addLog('✗ 请至少勾选一个岗位', 'error');
+  setStep(3);
   setRunning(true);
   addLog('▶ 开始投递 ' + ids.length + ' 个岗位', 'info');
   chrome.runtime.sendMessage({ type: 'START_DELIVER', jobIds: ids }, (resp) => { if (resp && resp.ok === false) setRunning(false); });
@@ -233,6 +348,7 @@ $('btnStop').addEventListener('click', () => {
 $('btnReset').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'RESET' });
   $('reviewCard').style.display = 'none';
+  setStep(0);
   setRunning(false);
   $('progressBar').style.width = '0%';
   $('progText').textContent = '';
@@ -285,6 +401,23 @@ function guardAlive() {
   return true;
 }
 
+// ===== 安全验证横幅：命中验证页时提示人工处理 =====
+function showVerifyBanner() {
+  if (!$('headerStatus')) return;
+  if (!document.getElementById('verifyBanner')) {
+    const b = document.createElement('div');
+    b.id = 'verifyBanner';
+    b.className = 'verify-banner';
+    b.textContent = '⚠ 平台要求安全验证：请到 BOSS 页面完成滑块/验证，完成后点「继续」';
+    document.body.insertBefore(b, document.body.firstChild);
+  }
+  $('headerStatus').textContent = '需安全验证';
+}
+function hideVerifyBanner() {
+  const b = document.getElementById('verifyBanner');
+  if (b) b.remove();
+}
+
 // ===== 审核列表 =====
 function renderReview(screened) {
   const matched = screened.filter(j => j.match);
@@ -301,8 +434,10 @@ function renderReview(screened) {
       + '</div></div>';
   });
   skipped.forEach(j => {
-    html += '<div class="job-item skip">'
-      + '<input type="checkbox" disabled data-id="' + esc(j.id) + '">'
+    // AI 判不匹配的仍可手动勾选投递；规则主动剔除的保持禁用（避免误投黑名单等）
+    const isRule = String(j.reason || '').indexOf('规则：') === 0;
+    html += '<div class="job-item ' + (isRule ? 'skip' : 'nomatch') + '">'
+      + '<input type="checkbox"' + (isRule ? ' disabled' : '') + ' data-id="' + esc(j.id) + '">'
       + '<div class="job-main">'
       + '<div class="job-title">' + esc(j.name) + '</div>'
       + '<div class="job-sub">' + esc(j.company) + ' · ' + esc(j.salary) + '</div>'
@@ -474,7 +609,18 @@ function refreshStats() {
         + '<span class="bar-date">' + esc(d.date.slice(8)) + '</span></div>';
     }).join('');
     if (!$('monthlyGoal').value) $('monthlyGoal').value = monthly > 0 ? monthly : '';
+    renderRuleStats(resp.rules || []);
   });
+}
+
+function renderRuleStats(rules) {
+  const box = $('ruleStats');
+  if (!box) return;
+  rules = rules || [];
+  if (!rules.length) { box.innerHTML = '<div class="job-sub" style="text-align:center;padding:8px">暂无拦截数据</div>'; return; }
+  box.innerHTML = '<div class="companies-scroll">' + rules.map(r =>
+    '<div class="co-row"><span class="co-name">' + esc(r.rule) + '</span><span class="co-meta">×' + esc(r.count) + '</span></div>'
+  ).join('') + '</div>';
 }
 
 $('btnSaveGoal').addEventListener('click', () => {
@@ -496,13 +642,16 @@ $('btnClearStats').addEventListener('click', () => {
 });
 
 function loadPaceUI() {
-  chrome.storage.local.get('paceConfig', (d) => {
+  chrome.storage.local.get(['paceConfig', 'riskConfig'], (d) => {
     const p = d.paceConfig || {};
     $('maxPerRun').value = p.maxPerRun > 0 ? p.maxPerRun : '';
     $('dailyGoal').value = p.dailyGoal > 0 ? p.dailyGoal : '';
     $('pauseOnGoal').checked = p.pauseOnGoal !== false;
     $('postRestText').value = Array.isArray(p.postDeliverRest) ? p.postDeliverRest[0] + '-' + p.postDeliverRest[1] : '';
     $('preSendText').value = Array.isArray(p.preSendDelay) ? p.preSendDelay[0] + '-' + p.preSendDelay[1] : '';
+    const r = d.riskConfig || {};
+    if ($('riskVerify')) $('riskVerify').checked = r.verifyDetect !== false;
+    if ($('riskMaxFail')) $('riskMaxFail').value = r.maxConsecFail > 0 ? r.maxConsecFail : '';
   });
 }
 
@@ -520,11 +669,15 @@ $('btnSavePace').addEventListener('click', () => {
     };
     p.postDeliverRest = parseRange($('postRestText').value, p.postDeliverRest);
     p.preSendDelay = parseRange($('preSendText').value, p.preSendDelay);
-    chrome.storage.local.set({ paceConfig: p }, () => {
+    const risk = {
+      verifyDetect: $('riskVerify') ? $('riskVerify').checked : true,
+      maxConsecFail: parseInt($('riskMaxFail') && $('riskMaxFail').value, 10) || 5
+    };
+    chrome.storage.local.set({ paceConfig: p, riskConfig: risk }, () => {
       const s = $('paceSaved');
       s.classList.add('show');
       setTimeout(() => s.classList.remove('show'), 1500);
-      addLog('✓ 节奏已保存：单次上限 ' + p.maxPerRun + ' · 每日目标 ' + p.dailyGoal + ' · 投递后休息 ' + p.postDeliverRest[0] + '-' + p.postDeliverRest[1] + 's', 'success');
+      addLog('✓ 策略已保存：单次上限 ' + p.maxPerRun + ' · 每日目标 ' + p.dailyGoal + ' · 连续失败熔断 ' + risk.maxConsecFail + ' 次', 'success');
     });
   });
 });
@@ -552,10 +705,14 @@ chrome.runtime.onMessage.addListener((msg) => {
     let label = map[msg.phase] || msg.phase;
     if (msg.reason === 'goal') label = '达标暂停';
     if (msg.reason === 'quota') label = '单次上限暂停';
+    if (msg.reason === 'limit') label = '平台额度暂停';
+    if (msg.reason === 'failstreak') label = '连续失败暂停';
     $('phaseText').textContent = label;
+    setStep({ collecting: 1, screening: 1, review: 2, delivering: 3, done: 4 }[msg.phase] || 0);
     if (msg.reason) addLog('⏸ ' + label + '（投递记录与统计已更新）', 'warn');
     if (msg.phase === 'review' || msg.phase === 'done' || msg.phase === 'idle') {
       setRunning(false);
+      if (msg.phase === 'idle') hideVerifyBanner();
     }
     if (msg.phase === 'done') {
       $('statusDot').className = 'status-dot success';
@@ -565,6 +722,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   if (msg.type === 'SCREENED') renderReview(msg.screened);
   if (msg.type === 'COMPANIES_UPDATED') refreshCompanies();
+  if (msg.type === 'VERIFY_REQUIRED') showVerifyBanner();
+  if (msg.type === 'VERIFY_CLEARED') hideVerifyBanner();
   if (msg.type === 'DONE') {
     setRunning(false);
     $('progText').textContent = '';

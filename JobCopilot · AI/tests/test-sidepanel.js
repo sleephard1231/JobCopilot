@@ -189,6 +189,21 @@ define('sidepanel.js 侧边栏逻辑', t => {
     assert.strictEqual(env.doc.registry.reviewCard.style.display, 'block');
   });
 
+  t('renderReview：AI 不匹配岗位可勾选，规则剔除仍禁用', async () => {
+    const chrome = makeChrome();
+    const env = loadSidepanel(chrome);
+    await waitFor(() => env.doc.registry.apiBaseUrl.value !== '');
+    env.ctx.renderReview([
+      { id: '1', name: '匹配岗', company: 'A公司', salary: '10-15K', match: true, reason: '方向匹配' },
+      { id: '2', name: 'AI不匹配岗', company: 'B公司', salary: '8-10K', match: false, reason: '方向明显不符' },
+      { id: '3', name: '规则剔除岗', company: 'C公司', salary: '5-8K', match: false, reason: '规则：黑名单：C公司' }
+    ]);
+    const html = env.doc.registry.reviewList.innerHTML;
+    assert.ok(html.indexOf('job-item nomatch') >= 0, 'AI 不匹配项应为 nomatch 样式');
+    assert.ok(/<input type="checkbox" data-id="2">/.test(html), 'AI 不匹配项应可勾选（无 disabled）');
+    assert.ok(/<input type="checkbox" disabled data-id="3">/.test(html), '规则剔除项应保持 disabled');
+  });
+
   t('加载已有 filterConfig：UI 自动回填', async () => {
     const chrome = makeChrome();
     await chrome.storage.local.set({ filterConfig: { listMode: 'black', blacklist: [{ name: 'A公司', mode: 'exact' }], whitelist: [] } });
@@ -348,5 +363,23 @@ define('sidepanel.js 侧边栏逻辑', t => {
     await waitFor(() => chrome._storageData.has('statGoal'));
     const d = await chrome.storage.local.get('statGoal');
     assert.strictEqual(d.statGoal.monthly, 200);
+  });
+
+  t('风控设置：保存 riskConfig 并二次加载回填', async () => {
+    const chrome = makeChrome();
+    const env = loadSidepanel(chrome);
+    await waitFor(() => env.doc.registry.apiBaseUrl.value !== '');
+    const r = env.doc.registry;
+    r.riskVerify.checked = false;
+    r.riskMaxFail.value = '3';
+    r.btnSavePace.click();
+    await waitFor(() => chrome._storageData.has('riskConfig'));
+    const d = await chrome.storage.local.get('riskConfig');
+    assert.strictEqual(d.riskConfig.verifyDetect, false);
+    assert.strictEqual(d.riskConfig.maxConsecFail, 3);
+    const env2 = loadSidepanel(chrome);
+    await waitFor(() => env2.doc.registry.riskMaxFail.value === '3');
+    assert.strictEqual(env2.doc.registry.riskVerify.checked, false, '开关回填');
+    assert.strictEqual(env2.doc.registry.riskMaxFail.value, '3', '阈值回填');
   });
 });

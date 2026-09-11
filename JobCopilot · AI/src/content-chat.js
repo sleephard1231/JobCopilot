@@ -151,6 +151,7 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === 'PING') { sendResponse({ success: true, alive: true }); return; }
     if (msg.type === 'SEND') {
       doSend(msg).then(r => sendResponse(r)).catch(e => sendResponse({ success: false, error: e.message }));
       return true;

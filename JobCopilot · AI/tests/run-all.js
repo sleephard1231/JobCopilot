@@ -6,4 +6,6 @@ require('./test-background');
 require('./test-content-search');
 require('./test-content-chat');
 require('./test-sidepanel');
+require('./test-upgrade');
+require('./test-review');
 runAll(process.argv[2]);

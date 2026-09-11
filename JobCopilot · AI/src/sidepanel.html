@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="color-scheme" content="light">
   <title>小北智能招聘</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
@@ -11,7 +12,7 @@
     <header class="header">
       <div class="brand">
         <div class="brand-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
         </div>
         <div class="brand-text">
           <h1>小北智能招聘 <span class="ver" id="appVersion"></span></h1>
@@ -24,23 +25,138 @@
       </div>
     </header>
 
+    <!-- ═══ 运行区：面板的"主页"，打开即用 ═══ -->
+    <section class="card card--run">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="card-titles">
+            <div class="card-name">投递</div>
+            <div class="card-sub">收集 → AI 筛选 → 你确认后自动投递</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <ol class="steps" id="runSteps">
+          <li class="step" data-step="1"><span class="step-dot">1</span><span class="step-name">收集筛选</span></li>
+          <li class="step" data-step="2"><span class="step-dot">2</span><span class="step-name">审核</span></li>
+          <li class="step" data-step="3"><span class="step-dot">3</span><span class="step-name">投递</span></li>
+        </ol>
+
+        <button class="btn btn-go" id="btnCollect">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          <span>开始收集并筛选</span>
+        </button>
+        <div class="status-line">
+          <span class="status-label">状态</span>
+          <span id="phaseText">待开始</span>
+          <span class="progress-info" id="progText"></span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="ctrl">
+          <button class="btn btn-secondary btn-sm" id="btnPause" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+            <span>暂停</span>
+          </button>
+          <button class="btn btn-danger btn-sm" id="btnStop" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="6" width="12" height="12"></rect></svg>
+            <span>停止</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="btnReset">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            <span>重置</span>
+          </button>
+        </div>
+
+        <div class="sub-header" data-toggle="paceBody">
+          <div class="sub-title">
+            <div class="sub-name">运行策略 <span class="tip-inline">节奏 · 额度 · 风控</span></div>
+            <div class="sub-desc">防封号、防无效重试，默认即可</div>
+          </div>
+          <span class="btn-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </span>
+        </div>
+        <div class="sub-body" id="paceBody" style="display:none">
+          <div class="group-title">节奏与额度</div>
+          <div class="field-row-3">
+            <div class="field"><label>单次投递上限</label><input type="number" id="maxPerRun" min="1" placeholder="30"></div>
+            <div class="field"><label>每日目标</label><input type="number" id="dailyGoal" min="1" placeholder="60"></div>
+            <div class="field"><label>达标暂停</label>
+              <label class="switch"><input type="checkbox" id="pauseOnGoal"><span class="switch-track"></span></label>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>投递后休息（秒） <span class="tip">建议≥5</span></label><input type="text" id="postRestText" placeholder="5-8"></div>
+            <div class="field"><label>发送前等待（秒）</label><input type="text" id="preSendText" placeholder="2-4"></div>
+          </div>
+          <div class="divider"></div>
+          <div class="group-title">风控保护</div>
+          <label class="switch-row">
+            <span class="switch-label">验证页自动暂停 <span class="tip-inline">命中滑块/验证码时停下等你处理</span></span>
+            <span class="switch"><input type="checkbox" id="riskVerify"><span class="switch-track"></span></span>
+          </label>
+          <div class="field">
+            <label>连续失败熔断 <span class="tip">连续失败达到该次数自动收工</span></label>
+            <input type="number" id="riskMaxFail" min="1" max="20" placeholder="5">
+          </div>
+          <div class="actions">
+            <button class="btn btn-secondary btn-sm" id="btnSavePace">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              <span>保存策略</span>
+            </button>
+            <span id="paceSaved" class="toast">已保存</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ 审核区：筛选完成后动态出现 ═══ -->
+    <section class="card card--review" id="reviewCard" style="display:none">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="card-titles">
+            <div class="card-name">审核与投递</div>
+            <div class="card-sub">勾选要投的岗位，AI 没把握的由你把关</div>
+          </div>
+          <span class="badge" id="reviewCount"></span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="review-tools">
+          <label class="check-chip">
+            <input type="checkbox" id="selAll" checked>
+            <span>全选岗位</span>
+          </label>
+          <button class="btn btn-go btn-go-sm" id="btnDeliver">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            <span>投递选中</span>
+          </button>
+        </div>
+        <div id="reviewList"></div>
+      </div>
+    </section>
+
+    <div class="section-label">配置</div>
+
+    <!-- ═══ 基础配置 ═══ -->
     <section class="card">
       <div class="card-header" data-toggle="cfgBody">
         <div class="card-title">
-          <span class="step-num">1</span>
           <div class="card-titles">
-            <div class="card-name">准备工作</div>
-            <div class="card-sub">AI 接口、简历和搜索条件，首次使用必填</div>
+            <div class="card-name">基础配置</div>
+            <div class="card-sub" id="cfgSub">AI 接口 · 简历 · 搜索条件</div>
           </div>
         </div>
         <span class="btn-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </span>
       </div>
-      <div class="card-body" id="cfgBody">
-        <div class="group-title">AI 设置</div>
+      <div class="card-body" id="cfgBody" style="display:none">
+        <div class="group-title">AI 接口</div>
         <div class="field">
-          <label>服务商预设 <span class="tip">选一个自动填好接口地址和模型</span></label>
+          <label>服务商预设 <span class="tip">自动填好地址和模型</span></label>
           <select id="presetSelect">
             <option value="opencode">OpenCode（内置，免填 Key）</option>
             <option value="deepseek-flash">DeepSeek 官方 · V4 Flash</option>
@@ -48,24 +164,24 @@
             <option value="glm-5.3">智谱 GLM · GLM-5.3</option>
             <option value="glm-4.7">智谱 GLM · GLM-4.7</option>
             <option value="glm-4.7-flash">智谱 GLM · GLM-4.7-Flash（免费）</option>
-            <option value="custom">自定义（手动填写下方地址与模型）</option>
+            <option value="custom">自定义（手动填写）</option>
           </select>
         </div>
         <div class="field">
-          <label>AI 接口地址 <span class="tip">OpenAI 兼容接口，选预设会自动填</span></label>
+          <label>AI 接口地址 <span class="tip">OpenAI 兼容</span></label>
           <input type="text" id="apiBaseUrl" placeholder="https://api.deepseek.com/chat/completions">
         </div>
         <div class="field-row">
-          <div class="field"><label>AI 模型</label><input type="text" id="apiModel" placeholder="deepseek-v4-flash"></div>
-          <div class="field"><label>接口密钥</label><input type="password" id="apiKey" placeholder="sk-..."></div>
+          <div class="field"><label>模型</label><input type="text" id="apiModel" placeholder="deepseek-v4-flash"></div>
+          <div class="field"><label>密钥</label><input type="password" id="apiKey" placeholder="sk-..."></div>
         </div>
         <div class="group-title">我的简历</div>
         <div class="field">
-          <label>简历图片 <span class="tip">投递时发给 HR 的那张</span></label>
+          <label>简历图片 <span class="tip">投递时发给 HR</span></label>
           <div class="file-upload">
             <input type="file" id="resumeImg" accept="image/*">
             <div class="upload-area">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               <span>点击上传简历截图</span>
             </div>
             <div id="imgPrev"></div>
@@ -75,6 +191,13 @@
           <label>简历内容 <span class="tip">AI 靠它筛岗位、写招呼语</span></label>
           <textarea id="resumeText" rows="4" placeholder="粘贴简历要点：技能、项目经历、教育背景…"></textarea>
         </div>
+        <div class="group-title">招呼语模板（可选兜底）</div>
+        <div class="hint">
+          AI 优先为每个岗位写专属招呼语；AI 不可用时按此模板兜底。变量：<b>{{岗位}} {{公司}} {{薪资}} {{地区}} {{HR}} {{技能}} {{关键词}}</b>
+        </div>
+        <div class="field">
+          <textarea id="greetingTemplate" rows="3" placeholder="示例：您好，看到贵司{{岗位}}（{{薪资}}），我有{{技能}}相关经验，期待沟通！"></textarea>
+        </div>
         <div class="group-title">搜索条件</div>
         <div class="field-row-3">
           <div class="field"><label>岗位关键词</label><input type="text" id="keyword" placeholder="如：数据分析"></div>
@@ -83,7 +206,7 @@
         </div>
         <div class="actions">
           <button class="btn btn-primary" id="saveCfg">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
             <span>保存设置</span>
           </button>
           <button class="btn btn-ghost" id="btnRestorePreset">恢复预设</button>
@@ -92,29 +215,29 @@
       </div>
     </section>
 
+    <!-- ═══ 过滤规则 ═══ -->
     <section class="card">
       <div class="card-header" data-toggle="filterBody">
         <div class="card-title">
-          <span class="step-num">2</span>
           <div class="card-titles">
-            <div class="card-name">过滤规则 <span class="tip">可选</span></div>
-            <div class="card-sub">不想投的公司和岗位，在这里提前排除</div>
+            <div class="card-name">过滤规则 <span class="tag-optional">可选 · 免费</span></div>
+            <div class="card-sub" id="filterSub">AI 之前提前排除，零成本</div>
           </div>
         </div>
         <span class="btn-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </span>
       </div>
       <div class="card-body" id="filterBody" style="display:none">
         <div class="hint">
-          过滤在 AI 筛选<b>之前</b>执行，不花 AI 费用。名单每行一条：公司名后加 <b>@kw</b> 表示"名字里包含就算命中"，<b>#</b> 开头是注释行。
+          名单每行一条：公司名后加 <b>@kw</b> 表示"包含即命中"，<b>#</b> 开头是注释。
         </div>
         <div class="field">
-          <label>公司名单模式</label>
-          <div class="radio-row">
-            <label class="radio"><input type="radio" name="listMode" value="off">不启用</label>
-            <label class="radio"><input type="radio" name="listMode" value="black">黑名单（命中的不投）</label>
-            <label class="radio"><input type="radio" name="listMode" value="white">白名单（只投命中的）</label>
+          <label>公司名单</label>
+          <div class="seg">
+            <label class="seg-item"><input type="radio" name="listMode" value="off"><span>不启用</span></label>
+            <label class="seg-item"><input type="radio" name="listMode" value="black"><span>黑名单</span></label>
+            <label class="seg-item"><input type="radio" name="listMode" value="white"><span>白名单</span></label>
           </div>
         </div>
         <div class="field-row">
@@ -133,48 +256,69 @@
           <div class="field"><label>月薪下限 (K)</label><input type="number" id="salMin" min="0" placeholder="0 = 不限"></div>
           <div class="field"><label>月薪上限 (K)</label><input type="number" id="salMax" min="0" placeholder="0 = 不限"></div>
         </div>
-        <div class="field"><label>城市关键词 <span class="tip">逗号分隔，岗位地区需包含其一</span></label><input type="text" id="fCities" placeholder="北京, 朝阳"></div>
-        <div class="field"><label>地址排除 <span class="tip">逗号分隔，命中就不投</span></label><input type="text" id="fAddrEx" placeholder="外派, 驻外"></div>
+        <div class="field"><label>城市关键词 <span class="tip">命中其一即可</span></label><input type="text" id="fCities" placeholder="北京, 朝阳"></div>
+        <div class="field"><label>地址排除</label><input type="text" id="fAddrEx" placeholder="外派, 驻外"></div>
         <div class="field">
-          <label>只投活跃的 HR <span class="tip">勾选 = 保留对应活跃度</span></label>
-          <div class="radio-row">
-            <label class="checkbox"><input type="checkbox" id="actOnline">在线</label>
-            <label class="checkbox"><input type="checkbox" id="actWeek">本周活跃</label>
-            <label class="checkbox"><input type="checkbox" id="actMonth">本月活跃</label>
+          <label>只投活跃的 HR</label>
+          <div class="chip-row">
+            <label class="check-chip"><input type="checkbox" id="actOnline"><span>在线</span></label>
+            <label class="check-chip"><input type="checkbox" id="actWeek"><span>本周</span></label>
+            <label class="check-chip"><input type="checkbox" id="actMonth"><span>本月</span></label>
           </div>
         </div>
         <div class="field-row">
           <div class="field"><label>邀请量上限 <span class="tip">超出的不投</span></label><input type="number" id="inviteMax" min="0" placeholder="0 = 不限"></div>
-          <div class="field"><label>关键词过滤</label>
+          <div class="field">
+            <label>关键词过滤</label>
             <select id="kwMode">
               <option value="off">关闭</option>
               <option value="include">岗位须含关键词</option>
-              <option value="exclude">岗位含关键词则不投</option>
+              <option value="exclude">含关键词则不投</option>
             </select>
           </div>
         </div>
-        <div class="field"><label>关键词 <span class="tip">逗号分隔，匹配岗位名和技能标签</span></label><input type="text" id="fKeywords" placeholder="数据分析, Python"></div>
+        <div class="field"><label>关键词 <span class="tip">匹配岗位名和技能标签</span></label><input type="text" id="fKeywords" placeholder="数据分析, Python"></div>
         <div class="field">
-          <label>注册资金限制 <span class="tip">投递时从详情页核实</span></label>
-          <div class="field-row" style="align-items:center">
-            <label class="checkbox"><input type="checkbox" id="skipUsdFund">排除美元注册资金</label>
-            <div class="field"><input type="number" id="fundMin" min="0" placeholder="注册资金下限(万)，0 = 不限"></div>
+          <label>注册资金 <span class="tip">投递时从详情页核实</span></label>
+          <div class="inline-row">
+            <label class="check-chip"><input type="checkbox" id="skipUsdFund"><span>排除美元注册资金</span></label>
+            <input type="number" id="fundMin" min="0" placeholder="下限(万)，0 = 不限">
           </div>
         </div>
+        <div class="divider"></div>
+        <div class="group-title">通勤距离（高德地图）</div>
+        <div class="hint">
+          投递时算你家到公司的距离/时间，超限自动跳过。需自备高德 Web服务 Key（<b>免费</b>，<span style="user-select:all">lbs.amap.com</span>），不填自动放行。
+        </div>
+        <label class="switch-row">
+          <span class="switch-label">启用通勤筛选</span>
+          <span class="switch"><input type="checkbox" id="commuteOn"><span class="switch-track"></span></span>
+        </label>
+        <div class="field"><label>高德 Key</label><input type="text" id="commuteKey" placeholder="lbs.amap.com 申请（Web服务）"></div>
+        <div class="field"><label>我的住址</label><input type="text" id="commuteOrigin" placeholder="如：北京市海淀区中关村 1 号"></div>
+        <div class="field-row">
+          <div class="field"><label>驾车距离上限 (km)</label><input type="number" id="driveMaxKm" min="0" placeholder="0 = 不限"></div>
+          <div class="field"><label>驾车时间上限 (分钟)</label><input type="number" id="driveMaxMin" min="0" placeholder="0 = 不限"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>步行距离上限 (km)</label><input type="number" id="walkMaxKm" min="0" placeholder="0 = 不限"></div>
+          <div class="field"><label>步行时间上限 (分钟)</label><input type="number" id="walkMaxMin" min="0" placeholder="0 = 不限"></div>
+        </div>
+        <div class="divider"></div>
         <div class="field">
           <label>被过滤的岗位怎么处理</label>
-          <div class="radio-row">
-            <label class="radio"><input type="radio" name="jobHandle" value="skip">直接不显示</label>
-            <label class="radio"><input type="radio" name="jobHandle" value="collect">灰色显示在审核列表（不投）</label>
+          <div class="seg">
+            <label class="seg-item"><input type="radio" name="jobHandle" value="skip"><span>直接不显示</span></label>
+            <label class="seg-item"><input type="radio" name="jobHandle" value="collect"><span>灰色保留展示</span></label>
           </div>
         </div>
         <div class="actions">
           <button class="btn btn-primary" id="btnSaveFilter">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
             <span>保存过滤规则</span>
           </button>
           <button class="btn btn-secondary" id="btnDryRun">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
             <span>试算一次</span>
           </button>
           <span id="filterSaved" class="toast">已保存</span>
@@ -182,107 +326,20 @@
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-header">
-        <div class="card-title">
-          <span class="step-num">3</span>
-          <div class="card-titles">
-            <div class="card-name">开始投递</div>
-            <div class="card-sub">收集岗位 → AI 筛选 → 你确认后自动投递</div>
-          </div>
-        </div>
-      </div>
-      <div class="card-body">
-        <button class="btn btn-go" id="btnCollect">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          <span>开始收集并筛选</span>
-        </button>
-        <div class="status-line">
-          <span class="status-label">状态</span>
-          <span id="phaseText">待开始</span>
-          <span class="progress-info" id="progText"></span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-bar" id="progressBar"></div>
-        </div>
-        <div class="ctrl">
-          <button class="btn btn-secondary btn-sm" id="btnPause" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
-            <span>暂停</span>
-          </button>
-          <button class="btn btn-danger btn-sm" id="btnStop" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"></rect></svg>
-            <span>停止</span>
-          </button>
-          <button class="btn btn-ghost btn-sm" id="btnReset">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-            <span>重置</span>
-          </button>
-        </div>
-        <div class="divider"></div>
-        <div class="group-title">节奏设置（防风控）</div>
-        <div class="field-row-3">
-          <div class="field"><label>单次投递上限</label><input type="number" id="maxPerRun" min="1" placeholder="30"></div>
-          <div class="field"><label>每日目标</label><input type="number" id="dailyGoal" min="1" placeholder="60"></div>
-          <div class="field">
-            <label>达标自动暂停</label>
-            <div class="radio-row" style="margin-top:6px">
-              <label class="checkbox"><input type="checkbox" id="pauseOnGoal">开启</label>
-            </div>
-          </div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>投递后休息（秒） <span class="tip">随机区间，建议≥5</span></label><input type="text" id="postRestText" placeholder="5-8"></div>
-          <div class="field"><label>发送前等待（秒） <span class="tip">随机区间</span></label><input type="text" id="preSendText" placeholder="2-4"></div>
-        </div>
-        <div class="actions">
-          <button class="btn btn-secondary btn-sm" id="btnSavePace">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
-            <span>保存节奏</span>
-          </button>
-          <span id="paceSaved" class="toast">已保存</span>
-        </div>
-      </div>
-    </section>
+    <div class="section-label">记录</div>
 
-    <section class="card" id="reviewCard" style="display:none">
-      <div class="card-header">
-        <div class="card-title">
-          <span class="step-num">4</span>
-          <div class="card-titles">
-            <div class="card-name">审核确认</div>
-            <div class="card-sub">勾选要投的岗位，AI 没把握的由你把关</div>
-          </div>
-          <span class="badge" id="reviewCount"></span>
-        </div>
-      </div>
-      <div class="card-body">
-        <div class="review-tools">
-          <label class="checkbox">
-            <input type="checkbox" id="selAll" checked>
-            <span>全选匹配的岗位</span>
-          </label>
-          <button class="btn btn-go btn-go-sm" id="btnDeliver">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            <span>投递选中</span>
-          </button>
-        </div>
-        <div id="reviewList"></div>
-      </div>
-    </section>
-
+    <!-- ═══ 成果统计 ═══ -->
     <section class="card">
       <div class="card-header" data-toggle="statsBody">
         <div class="card-title">
-          <span class="step-num">5</span>
           <div class="card-titles">
-            <div class="card-name">投递统计</div>
-            <div class="card-sub">今日 / 本周 / 本月成果与近 14 天趋势</div>
+            <div class="card-name">成果统计</div>
+            <div class="card-sub">今日 / 周 / 月 · 近 14 天 · 规则拦截</div>
           </div>
           <span class="badge" id="statTodayBadge">0</span>
         </div>
         <span class="btn-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </span>
       </div>
       <div class="card-body" id="statsBody" style="display:none">
@@ -292,12 +349,16 @@
           <div class="stat-chip"><span class="chip-num" id="statMonth">0</span><span class="chip-label">本月成功</span></div>
         </div>
         <div class="field">
-          <label>本月目标进度 <span class="tip" id="statGoalText">0 / 300</span></label>
+          <label>本月目标 <span class="tip" id="statGoalText">0 / 300</span></label>
           <div class="progress-track"><div class="progress-bar" id="goalBar"></div></div>
         </div>
         <div class="field">
           <label>近 14 天投递量 <span class="tip">成功 + 失败</span></label>
           <div class="chart" id="statChart"></div>
+        </div>
+        <div class="field">
+          <label>规则拦截 <span class="tip">每条规则累计剔除数</span></label>
+          <div id="ruleStats"></div>
         </div>
         <div class="actions">
           <input type="number" id="monthlyGoal" min="1" placeholder="设本月目标" style="flex:1;width:auto">
@@ -307,17 +368,51 @@
       </div>
     </section>
 
+    <!-- ═══ 投递记录 ═══ -->
+    <section class="card">
+      <div class="card-header" data-toggle="companiesBody">
+        <div class="card-title">
+          <div class="card-titles">
+            <div class="card-name">投递记录</div>
+            <div class="card-sub">投过的公司和 HR · 避免重复打扰</div>
+          </div>
+          <span class="badge" id="companiesCount">0</span>
+        </div>
+        <span class="btn-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </span>
+      </div>
+      <div class="card-body" id="companiesBody" style="display:none">
+        <div class="toolbar-wrap">
+          <button class="btn btn-ghost btn-sm" id="btnClearCompanies">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
+            <span>清空记录</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="btnExportCompanies">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <span>导出 JSON</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="btnImportCompanies">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span>导入 JSON</span>
+          </button>
+          <input type="file" id="importFileInput" accept="application/json,.json" style="display:none">
+        </div>
+        <div id="companiesList" class="companies-list"></div>
+      </div>
+    </section>
+
+    <!-- ═══ 运行日志 ═══ -->
     <section class="card">
       <div class="card-header" data-toggle="logBody">
         <div class="card-title">
-          <span class="step-num">6</span>
           <div class="card-titles">
             <div class="card-name">运行日志</div>
-            <div class="card-sub">自动化过程的每一步记录，出错时看这里</div>
+            <div class="card-sub">每一步都有记录 · 出错看这里</div>
           </div>
         </div>
         <span class="btn-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </span>
       </div>
       <div class="card-body" id="logBody" style="display:none">
@@ -326,43 +421,6 @@
           <button class="btn btn-ghost btn-sm" id="clearLog">清空日志</button>
         </div>
         <div class="log" id="log"></div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-header" data-toggle="companiesBody">
-        <div class="card-title">
-          <span class="step-num">7</span>
-          <div class="card-titles">
-            <div class="card-name">投递记录</div>
-            <div class="card-sub">投过的公司和 HR，避免重复打扰</div>
-          </div>
-          <span class="badge" id="companiesCount">0</span>
-        </div>
-        <span class="btn-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </span>
-      </div>
-      <div class="card-body" id="companiesBody" style="display:none">
-        <div class="hint">
-          同一家公司的同一位 HR 只会投一次。投递成功会自动记录在这里，支持导出备份。
-        </div>
-        <div class="actions" style="flex-wrap:wrap;gap:8px">
-          <button class="btn btn-ghost btn-sm" id="btnClearCompanies">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
-            <span>清空记录</span>
-          </button>
-          <button class="btn btn-ghost btn-sm" id="btnExportCompanies">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-            <span>导出 JSON</span>
-          </button>
-          <button class="btn btn-ghost btn-sm" id="btnImportCompanies">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            <span>导入 JSON</span>
-          </button>
-          <input type="file" id="importFileInput" accept="application/json,.json" style="display:none">
-        </div>
-        <div id="companiesList" class="companies-list"></div>
       </div>
     </section>
   </div>

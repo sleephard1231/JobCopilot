@@ -15,6 +15,7 @@
     keywords: [],
     skipUsdFund: false,
     fundMin: 0,
+    commute: { enabled: false, key: '', origin: '', driveMaxKm: 0, driveMaxMin: 0, walkMaxKm: 0, walkMaxMin: 0 },
     jobHandle: 'skip'
   };
 
@@ -29,6 +30,7 @@
     const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
     c.salary = Object.assign({}, DEFAULT_FILTER.salary, isObj(cfg && cfg.salary) ? cfg.salary : {});
     c.active = Object.assign({}, DEFAULT_FILTER.active, isObj(cfg && cfg.active) ? cfg.active : {});
+    c.commute = Object.assign({}, DEFAULT_FILTER.commute, isObj(cfg && cfg.commute) ? cfg.commute : {});
     c.blacklist = Array.isArray(c.blacklist) ? c.blacklist : [];
     c.whitelist = Array.isArray(c.whitelist) ? c.whitelist : [];
     c.cities = toList(c.cities);
@@ -149,14 +151,33 @@
     if (c.inviteMax > 0 && typeof j.inviteCount === 'number' && j.inviteCount >= 0 && j.inviteCount > c.inviteMax) {
       return '邀请量过高（' + j.inviteCount + '）';
     }
-
     const hay = (String(j.name || '') + ' ' + (j.tags || []).join(' ')).toLowerCase();
     if (c.keywords.length) {
       if (c.kwMode === 'include' && !c.keywords.some(k => hay.indexOf(k.toLowerCase()) >= 0)) return '关键词不含';
       if (c.kwMode === 'exclude' && c.keywords.some(k => hay.indexOf(k.toLowerCase()) >= 0)) return '关键词排除';
     }
 
-    return checkFund(j, c);
+    const fundReason = checkFund(j, c);
+    if (fundReason) return fundReason;
+    return checkCommuteNorm(j, c);
+  }
+
+  // 通勤判定的归一化版本：checkJob 传入的已是归一化配置，避免重复 normalize
+  function checkCommuteNorm(j, c) {
+    if (!j || !c.commute || !c.commute.enabled) return '';
+    const m = j.commute;
+    if (!m || typeof m !== 'object') return ''; // 未预计算（功能关闭/接口失败）→ 放行
+    const reasons = [];
+    if (c.commute.driveMaxKm > 0 && m.driveKm != null && m.driveKm > c.commute.driveMaxKm) reasons.push('驾车距离超 ' + c.commute.driveMaxKm + 'km');
+    if (c.commute.driveMaxMin > 0 && m.driveMin != null && m.driveMin > c.commute.driveMaxMin) reasons.push('驾车时间超 ' + c.commute.driveMaxMin + ' 分钟');
+    if (c.commute.walkMaxKm > 0 && m.walkKm != null && m.walkKm > c.commute.walkMaxKm) reasons.push('步行距离超 ' + c.commute.walkMaxKm + 'km');
+    if (c.commute.walkMaxMin > 0 && m.walkMin != null && m.walkMin > c.commute.walkMaxMin) reasons.push('步行时间超 ' + c.commute.walkMaxMin + ' 分钟');
+    return reasons.join('；');
+  }
+
+  // 通勤规则单独暴露：投递期由 amap.js 预计算好 job.commute 后可二次校验（本函数保持纯同步）
+  function checkCommute(j, cfgRaw) {
+    return checkCommuteNorm(j, normalize(cfgRaw));
   }
 
   // 注册资金规则单独暴露：投递期拿到 JD 后可二次校验
@@ -191,6 +212,7 @@
     matchList: matchList,
     checkJob: checkJob,
     checkFund: checkFund,
+    checkCommute: checkCommute,
     applyFilters: applyFilters
   };
 
