@@ -382,4 +382,17 @@ define('sidepanel.js 侧边栏逻辑', t => {
     assert.strictEqual(env2.doc.registry.riskVerify.checked, false, '开关回填');
     assert.strictEqual(env2.doc.registry.riskMaxFail.value, '3', '阈值回填');
   });
+
+  t('规则统计渲染：数字 count 不崩溃（esc 数字回归）', async () => {
+    const chrome = makeChrome();
+    const env = loadSidepanel(chrome);
+    await waitFor(() => env.doc.registry.apiBaseUrl.value !== '');
+    assert.strictEqual(env.ctx.esc(5), '5', 'esc 应能处理数字');
+    assert.strictEqual(env.ctx.esc(0), '0');
+    assert.strictEqual(env.ctx.esc(null), '', 'null/undefined 应为空串');
+    assert.strictEqual(env.ctx.esc(undefined), '');
+    env.ctx.renderRuleStats([{ rule: '黑名单', count: 3 }]);
+    const html = env.doc.registry.ruleStats.innerHTML;
+    assert.ok(html.indexOf('黑名单') >= 0 && html.indexOf('×3') >= 0, '应正常渲染规则与数量');
+  });
 });

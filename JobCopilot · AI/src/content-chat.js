@@ -67,18 +67,32 @@
     return { ok: true };
   }
 
+  // 发送简历图片：返回 {ok, confirmed}
+  //   ok=false      → 图片根本没上传（未配置可发送，或找不到入口/数据损坏），调用方应判失败
+  //   confirmed=false → change 事件已派发但页面上未观察到新图片，可能上传未完成，仅告警
   async function sendImage(image) {
-    if (!image) return true;
+    if (!image) return { ok: true, confirmed: true };
     const input = findVisible(IMG_SELS) || document.querySelector('input[type=file]');
-    if (!input) return false;
-    const file = dataURLtoFile(image, 'resume.png');
+    if (!input) return { ok: false, confirmed: false, err: '未找到图片上传入口' };
+    let file;
+    try { file = dataURLtoFile(image, 'resume.png'); }
+    catch (e) { return { ok: false, confirmed: false, err: '图片数据无效：' + (e.message || e) }; }
+    const beforeImgs = document.querySelectorAll('.item-myself img, img[src^="blob:"]').length;
     const dt = new DataTransfer();
     dt.items.add(file);
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'files').set;
-    setter.call(input, dt.files);
+    try {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'files').set;
+      setter.call(input, dt.files);
+    } catch (e) { return { ok: false, confirmed: false, err: '图片写入失败：' + (e.message || e) }; }
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(2500);
-    return true;
+    // 轮询确认：出现新的「自己发出」的图片才算送达（最长约 8 秒）
+    for (let i = 0; i < 20; i++) {
+      await sleep(400);
+      if (document.querySelectorAll('.item-myself img, img[src^="blob:"]').length > beforeImgs) {
+        return { ok: true, confirmed: true };
+      }
+    }
+    return { ok: true, confirmed: false, err: '未能确认图片已发送' };
   }
 
   function inputText(el) { return (el.isContentEditable || el.getAttribute('contenteditable') === 'true') ? (el.textContent || '') : (el.value || ''); }
@@ -110,9 +124,13 @@
     const before = document.querySelectorAll(SELECTORS.chat.messageSent).length;
     // 以回车为主发送
     pressEnter(input);
-    // 兜底：若有发送按钮也点一下
-    const btn = findVisible(SEND_SELS);
-    if (btn && !btn.classList.contains('disabled') && !btn.disabled) btn.click();
+    await sleep(400);
+    // 回车已生效（输入框清空或新增气泡）就不要再点按钮，避免重复/空消息
+    const sentByEnter = !inputText(input).trim() || document.querySelectorAll(SELECTORS.chat.messageSent).length > before;
+    if (!sentByEnter) {
+      const btn = findVisible(SEND_SELS);
+      if (btn && !btn.classList.contains('disabled') && !btn.disabled) btn.click();
+    }
 
     // 验证：输入框被清空 或 新增自己消息气泡 => 成功
     for (let i = 0; i < 12; i++) {
@@ -127,11 +145,12 @@
   async function doSend(msg) {
     const oc = await openConversation(msg.company, msg.hrName, msg.position);
     if (!oc.ok) return { success: false, error: oc.err };
-    const imgOk = await sendImage(msg.image);
+    const img = await sendImage(msg.image);
+    if (!img.ok) return { success: false, error: '简历图片：' + (img.err || '上传失败') };
     await sleep(800);
     const tr = await sendText(msg.greeting);
     if (!tr.ok) return { success: false, error: tr.err };
-    return { success: true, imageOk: imgOk };
+    return { success: true, imageOk: img.ok, imageConfirmed: img.confirmed };
   }
 
   // 发给当前已打开的会话（点继续沟通后跳进来的就是目标岗位，无需匹配）
@@ -143,11 +162,13 @@
       input = await waitVisible(INPUT_SELS, 6000);
     }
     if (!input) return { success: false, error: '未找到输入框｜' + dumpInputs() };
-    const imgOk = await sendImage(image);
+    const img = await sendImage(image);
+    // 配置了简历图却传不上去：直接判失败，避免"没发简历却显示投递成功"
+    if (!img.ok) return { success: false, error: '简历图片：' + (img.err || '上传失败') };
     await sleep(800);
     const tr = await sendText(greeting);
     if (!tr.ok) return { success: false, error: tr.err };
-    return { success: true, imageOk: imgOk };
+    return { success: true, imageOk: img.ok, imageConfirmed: img.confirmed };
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

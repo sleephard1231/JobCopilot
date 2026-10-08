@@ -133,4 +133,14 @@ define('content-chat.js 发送逻辑', t => {
     assert.ok(r && r.success === false);
     assert.ok(r.error.indexOf('发送未确认') >= 0);
   });
+
+  t('SEND_ACTIVE：配置了简历图片但无上传入口 → 判失败不误报成功（回归）', async () => {
+    const env = loadChat(dom => {
+      buildChatInput(dom);
+      dom.body.appendChild(dom.makeEl('div', 'item-myself', '旧'));
+    });
+    const r = await env.send({ type: 'SEND_ACTIVE', image: 'data:image/png;base64,AAAA', greeting: '您好' });
+    assert.ok(r && r.success === false, '图片传不上去不应报成功');
+    assert.ok(/简历图片/.test(r.error || ''), '应提示图片问题：' + r.error);
+  });
 });

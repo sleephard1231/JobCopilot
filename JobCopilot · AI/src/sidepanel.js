@@ -173,10 +173,15 @@ async function ensureEndpointPermission() {
 
 $('resumeImg').addEventListener('change', (e) => {
   const file = e.target.files[0]; if (!file) return;
+  if (!/^image\//.test(file.type || '')) { addLog('✗ 简历图片需为图片文件', 'error'); e.target.value = ''; return; }
+  // storage.local 有配额限制，过大图片会静默写入失败
+  if (file.size > 2 * 1024 * 1024) { addLog('✗ 简历图片过大（>2MB），请压缩后再上传', 'error'); e.target.value = ''; return; }
   const reader = new FileReader();
   reader.onload = (ev) => {
     showImg(ev.target.result);
-    chrome.storage.local.set({ resumeImage: ev.target.result });
+    chrome.storage.local.set({ resumeImage: ev.target.result }, () => {
+      if (chrome.runtime.lastError) addLog('✗ 简历图片保存失败：' + chrome.runtime.lastError.message, 'error');
+    });
   };
   reader.readAsDataURL(file);
 });
@@ -194,7 +199,9 @@ $('saveCfg').addEventListener('click', async () => {
   });
 });
 
-function saveCfgSync() {
+async function saveCfgSync() {
+  // 与「保存设置」一致：自定义端点在开始收集前也要先拿到域名授权，否则 fetch 会失败
+  await ensureEndpointPermission();
   return new Promise(res => {
     const obj = {};
     CFG_FIELDS.forEach(f => { obj[f] = $(f).value; });
@@ -449,7 +456,8 @@ function renderReview(screened) {
 }
 
 function esc(s) {
-  return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // 数字/其它非字符串也要安全（规则统计的 count 是数字，旧写法会抛 replace is not a function）
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 // ===== 已投递企业面板 =====
@@ -652,12 +660,19 @@ function loadPaceUI() {
     const r = d.riskConfig || {};
     if ($('riskVerify')) $('riskVerify').checked = r.verifyDetect !== false;
     if ($('riskMaxFail')) $('riskMaxFail').value = r.maxConsecFail > 0 ? r.maxConsecFail : '';
+    const wh = p.workHours || {};
+    if ($('workHoursOn')) $('workHoursOn').checked = wh.enabled === true;
+    if ($('workHourStart')) $('workHourStart').value = wh.start != null ? wh.start : '';
+    if ($('workHourEnd')) $('workHourEnd').value = wh.end != null ? wh.end : '';
+    if ($('longBreakEvery')) $('longBreakEvery').value = p.longBreakEvery > 0 ? p.longBreakEvery : '';
+    if ($('longBreakText')) $('longBreakText').value = Array.isArray(p.longBreakRest) ? p.longBreakRest[0] + '-' + p.longBreakRest[1] : '';
+    if ($('verifyCooldown')) $('verifyCooldown').value = p.verifyCooldownMin > 0 ? p.verifyCooldownMin : '';
   });
 }
 
 $('btnSavePace').addEventListener('click', () => {
   chrome.storage.local.get('paceConfig', (d) => {
-    const p = Object.assign({ preSendDelay: [2, 4], postDeliverRest: [5, 8], skipRest: [2, 4], maxPerRun: 30, dailyGoal: 60, pauseOnGoal: true }, d.paceConfig || {});
+    const p = Object.assign({ preSendDelay: [5, 12], postDeliverRest: [45, 120], skipRest: [2, 4], maxPerRun: 8, dailyGoal: 25, pauseOnGoal: true, workHours: { enabled: false, start: 9, end: 21 }, longBreakEvery: 5, longBreakRest: [180, 600], verifyCooldownMin: 10 }, d.paceConfig || {});
     p.maxPerRun = parseInt($('maxPerRun').value, 10) || p.maxPerRun;
     p.dailyGoal = parseInt($('dailyGoal').value, 10) || p.dailyGoal;
     p.pauseOnGoal = $('pauseOnGoal').checked;
@@ -669,6 +684,20 @@ $('btnSavePace').addEventListener('click', () => {
     };
     p.postDeliverRest = parseRange($('postRestText').value, p.postDeliverRest);
     p.preSendDelay = parseRange($('preSendText').value, p.preSendDelay);
+    const whStart = parseInt($('workHourStart') && $('workHourStart').value, 10);
+    const whEnd = parseInt($('workHourEnd') && $('workHourEnd').value, 10);
+    const whOld = p.workHours || {};
+    const clampHour = (v, fb) => (isFinite(v) && v >= 0 && v <= 23) ? v : fb;
+    p.workHours = {
+      enabled: $('workHoursOn') ? $('workHoursOn').checked : false,
+      start: clampHour(whStart, whOld.start != null ? whOld.start : 9),
+      end: clampHour(whEnd, whOld.end != null ? whOld.end : 21)
+    };
+    const lbe = parseInt($('longBreakEvery') && $('longBreakEvery').value, 10);
+    p.longBreakEvery = (isFinite(lbe) && lbe >= 0) ? lbe : p.longBreakEvery;
+    p.longBreakRest = parseRange($('longBreakText') && $('longBreakText').value, p.longBreakRest);
+    const vc = parseInt($('verifyCooldown') && $('verifyCooldown').value, 10);
+    p.verifyCooldownMin = (isFinite(vc) && vc >= 0) ? vc : p.verifyCooldownMin;
     const risk = {
       verifyDetect: $('riskVerify') ? $('riskVerify').checked : true,
       maxConsecFail: parseInt($('riskMaxFail') && $('riskMaxFail').value, 10) || 5

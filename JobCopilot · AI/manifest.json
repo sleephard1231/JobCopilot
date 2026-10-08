@@ -11,7 +11,8 @@
     "*://*.zhipin.com/*",
     "https://api.deepseek.com/*",
     "https://opencode.ai/*",
-    "https://open.bigmodel.cn/*"
+    "https://open.bigmodel.cn/*",
+    "https://restapi.amap.com/*"
   ],
   "optional_host_permissions": ["*://*/*"],
   "background": { "service_worker": "src/background.js" },

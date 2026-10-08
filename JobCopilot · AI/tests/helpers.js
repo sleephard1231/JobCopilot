@@ -38,32 +38,44 @@ async function runAll(onlyName) {
 function clone(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
 
 // ── chrome.* mock ──
+function makeStorageArea(data) {
+  return {
+    get(keys, cb) {
+      // 惰性求值：微任务执行时才读取最新数据（与真实 chrome.storage 时序一致）
+      const buildOut = () => {
+        const list = keys == null ? [...data.keys()]
+          : Array.isArray(keys) ? keys
+          : typeof keys === 'string' ? [keys]
+          : Object.keys(keys);
+        const out = {};
+        for (const k of list) if (data.has(k)) out[k] = clone(data.get(k));
+        return out;
+      };
+      if (cb) { setImmediate(() => cb(buildOut())); return; }
+      return Promise.resolve().then(buildOut);
+    },
+    set(obj, cb) {
+      for (const k of Object.keys(obj)) data.set(k, clone(obj[k]));
+      if (cb) { setImmediate(() => cb()); return; }
+      return Promise.resolve();
+    },
+    remove(keys, cb) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const k of list) data.delete(k);
+      if (cb) { setImmediate(() => cb()); return; }
+      return Promise.resolve();
+    },
+    _data: data
+  };
+}
+
 function makeChrome(opts) {
   opts = opts || {};
   const data = new Map();
+  const sessionData = new Map();
   const storage = {
-    local: {
-      get(keys, cb) {
-        // 惰性求值：微任务执行时才读取最新数据（与真实 chrome.storage 时序一致）
-        const buildOut = () => {
-          const list = keys == null ? [...data.keys()]
-            : Array.isArray(keys) ? keys
-            : typeof keys === 'string' ? [keys]
-            : Object.keys(keys);
-          const out = {};
-          for (const k of list) if (data.has(k)) out[k] = clone(data.get(k));
-          return out;
-        };
-        if (cb) { setImmediate(() => cb(buildOut())); return; }
-        return Promise.resolve().then(buildOut);
-      },
-      set(obj, cb) {
-        for (const k of Object.keys(obj)) data.set(k, clone(obj[k]));
-        if (cb) { setImmediate(() => cb()); return; }
-        return Promise.resolve();
-      },
-      _data: data
-    }
+    local: makeStorageArea(data),
+    session: makeStorageArea(sessionData)
   };
 
   const runtimeMessages = [];
@@ -126,7 +138,7 @@ function makeChrome(opts) {
     });
   }
 
-  return { storage, runtime, tabs, scripting, alarms, sidePanel, panelSend, _storageData: data };
+  return { storage, runtime, tabs, scripting, alarms, sidePanel, panelSend, _storageData: data, _sessionData: sessionData };
 }
 
 // ── SW 加载器：vm 沙箱 + 快速定时器 ──
@@ -135,7 +147,7 @@ function loadSW(chrome, fetchMock, extraFiles) {
   const files = extraFiles || ['/src/background.js'];
   const ctx = {
     console, chrome, fetch: fetchMock,
-    URL, URLSearchParams, TextEncoder, TextDecoder,
+    URL, URLSearchParams, TextEncoder, TextDecoder, AbortController,
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms || 0, 1)),
     clearTimeout, clearInterval,
     setInterval: (fn, ms) => setInterval(fn, Math.min(ms || 10, 10)),

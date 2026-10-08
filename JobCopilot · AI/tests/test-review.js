@@ -421,6 +421,23 @@ define('review 针对性测试', t => {
     assert.strictEqual(JSON.stringify(requested[0]), JSON.stringify(['https://my-ai.example/*']), '应请求自定义端点域名');
   });
 
+  t('⑩ 开始收集：自定义端点先申请域名授权（回归）', async () => {
+    const requested = [];
+    const chrome = makeChrome();
+    chrome.permissions = {
+      contains: async () => false,
+      request: async (o) => { requested.push(o.origins[0]); return true; }
+    };
+    const env = loadSidepanelLite(chrome);
+    env.registry.apiBaseUrl.value = 'https://my-ai.example/v1/chat/completions';
+    env.registry.apiModel.value = 'my-model';
+    env.registry.apiKey.value = 'sk-x';
+    env.registry.keyword.value = '数据分析';
+    env.registry.btnCollect.click();
+    await waitFor(() => requested.length > 0, 3000);
+    assert.strictEqual(requested[0], 'https://my-ai.example/*', '开始收集前应申请端点域名');
+  });
+
   t('⑩ 域名授权：已授权域名不再重复 request', async () => {
     let requestCalls = 0;
     const chrome = makeChrome();
@@ -498,6 +515,113 @@ define('review 针对性测试', t => {
     const r2 = await ctx.BPAmap.checkCommute({ addr: '北京市朝阳区望京SOHO' }, cfg);
     assert.strictEqual(r2, '');
     assert.strictEqual(distCalls, 4, '失败不缓存，第二次应重试驾车+步行');
+  });
+
+  t('工作时段：开启且当前不在时段 → 不投递并 reason=hours', async () => {
+    const h = new Date().getHours();
+    const cfg = Object.assign(baseCfg({}), { paceConfig: { workHours: { enabled: true, start: (h + 2) % 24, end: (h + 3) % 24 } } });
+    const { chrome, fetch } = setup({ cfg });
+    await collectToReview(chrome);
+    const callsAfterCollect = fetch._calls.length;
+    await chrome.panelSend({ type: 'START_DELIVER', jobIds: ['J1'] });
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'done'; }, 8000);
+    assert.strictEqual(fetch._calls.length, callsAfterCollect, '不在时段不应产生招呼语调用');
+    const phases = chrome.runtime._runtimeMessages.filter(m => m.type === 'PHASE');
+    assert.strictEqual(phases[phases.length - 1].reason, 'hours', '应以 hours 收尾');
+    assert.ok(chrome.runtime._runtimeMessages.some(m => m.type === 'LOG' && /不在工作时段/.test(m.text)), '应有工作时段日志');
+    const sent = await chrome.storage.local.get('sentContacts');
+    assert.strictEqual(Object.keys(sent.sentContacts || {}).length, 0, '不在时段不应投出');
+  });
+
+  t('工作时段：开启且当前在时段 → 正常投出', async () => {
+    const h = new Date().getHours();
+    const cfg = Object.assign(baseCfg({}), { paceConfig: { workHours: { enabled: true, start: h, end: (h + 1) % 24 } } });
+    const { chrome } = setup({ cfg });
+    await collectToReview(chrome);
+    await deliverToDone(chrome);
+    const sent = await chrome.storage.local.get('sentContacts');
+    assert.strictEqual(Object.keys(sent.sentContacts || {}).length, 1, '在时段内应正常投出');
+  });
+
+  t('标签页：新建专用页并复用，不劫持用户已有 BOSS 页（回归）', async () => {
+    let createCount = 0, queryCount = 0;
+    const { chrome } = setup({
+      llm: [MATCH_JSON, GREETING],
+      setupChrome: (c) => {
+        const origCreate = c.tabs.create, origQuery = c.tabs.query;
+        c.tabs.create = (t, cb) => { createCount++; return origCreate.call(c.tabs, t, cb); };
+        c.tabs.query = (q, cb) => { queryCount++; return origQuery.call(c.tabs, q, cb); };
+      }
+    });
+    await collectToReview(chrome);
+    await deliverToDone(chrome);
+    assert.strictEqual(queryCount, 0, '不应查询整站已有标签页');
+    assert.strictEqual(createCount, 1, '整个流程应只新建一个专用标签页');
+  });
+
+  t('限流 429 自动重试：退避后成功，不误判为不匹配（回归）', async () => {
+    const { chrome, fetch } = setup({ llm: [429, MATCH_JSON] });
+    const resp = await chrome.panelSend({ type: 'START_COLLECT' });
+    assert.ok(resp && resp.ok);
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'review'; }, 8000);
+    const s = await chrome.panelSend({ type: 'GET_STATE' });
+    assert.strictEqual(s.screened[0].match, true, '429 重试后应匹配');
+    assert.strictEqual(fetch._calls.length, 2, '应重试一次');
+  });
+
+  t('amap 超时：请求挂起时失败放行，不卡死投递（回归）', async () => {
+    const { makeChrome: mk, loadSW: lsw } = require('./helpers');
+    const hang = (url, init) => new Promise((resolve, reject) => {
+      const sig = init && init.signal;
+      if (sig) sig.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+    const chrome = mk({ contentHandler: () => ({ success: true }) });
+    const ctx = lsw(chrome, hang);
+    const r = await ctx.BPAmap.checkCommute({ addr: '北京市朝阳区望京SOHO' }, { key: 'k', origin: '北京市海淀区中关村', driveMaxKm: 1 });
+    assert.strictEqual(r, '', '取不到距离应放行');
+  });
+
+  t('manifest：关键域名已声明 host_permissions（回归）', () => {
+    const fs = require('fs'), path = require('path');
+    const m = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+    const hp = m.host_permissions || [];
+    for (const o of ['*://*.zhipin.com/*', 'https://api.deepseek.com/*', 'https://opencode.ai/*', 'https://open.bigmodel.cn/*', 'https://restapi.amap.com/*']) {
+      assert.ok(hp.indexOf(o) >= 0, '缺少 host_permission: ' + o);
+    }
+  });
+
+  t('专用标签页：SW 重启后从 storage.session 复用，不重复新建（回归）', async () => {
+    const { makeChrome: mk, loadSW: lsw, makeFetchQueue: mfq } = require('./helpers');
+    let createCount = 0, queryCount = 0;
+    const chrome = mk({ contentHandler: () => ({ success: true }) });
+    const origCreate = chrome.tabs.create, origQuery = chrome.tabs.query;
+    chrome.tabs.create = (t, cb) => { createCount++; return origCreate.call(chrome.tabs, t, cb); };
+    chrome.tabs.query = (q, cb) => { queryCount++; return origQuery.call(chrome.tabs, q, cb); };
+    const ctx1 = lsw(chrome, mfq([]));
+    await ctx1.acquireTab('https://www.zhipin.com/web/geek/jobs?query=x');
+    assert.strictEqual(createCount, 1, '首次应新建标签页');
+    assert.strictEqual(chrome._sessionData.get('bossTabId'), 1, 'id 应写入 storage.session');
+    // 模拟 SW 被回收后重启：全新实例，内存中的 bossTabId 为空
+    const ctx2 = lsw(chrome, mfq([]));
+    await ctx2.acquireTab('https://www.zhipin.com/web/geek/jobs?query=x');
+    assert.strictEqual(createCount, 1, '重启后应复用 session 中的标签页');
+    assert.strictEqual(queryCount, 0, '不应查询整站标签页');
+  });
+
+  t('接口超时：callLLM 卡死时按超时抛错，不永久挂起（回归）', async () => {
+    // 永不 resolve 的 fetch，仅在 signal abort 时 reject
+    const hang = (url, init) => new Promise((resolve, reject) => {
+      const sig = init && init.signal;
+      if (sig) sig.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+    hang._calls = [];
+    const { chrome } = setup({ fetch: hang });
+    const resp = await chrome.panelSend({ type: 'START_COLLECT' });
+    assert.ok(resp && resp.ok);
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'review'; }, 8000);
+    const s = await chrome.panelSend({ type: 'GET_STATE' });
+    assert.strictEqual(s.screened.length, 1);
+    assert.ok(/接口超时/.test(s.screened[0].reason), '应报超时：' + s.screened[0].reason);
   });
 });
 

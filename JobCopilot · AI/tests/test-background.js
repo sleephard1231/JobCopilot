@@ -157,6 +157,50 @@ define('background.js 集成流程', t => {
     assert.ok(doneLogs.length > 0, '应出现「已投过同企业 HR」跳过日志');
   });
 
+  t('联系人去重降级：同公司且本次 HR 名缺失也判重复（回归）', async () => {
+    const { chrome, fetch } = setup({
+      openJdByJob: { J1: { hrName: '王女士' }, J4: { hrName: '' } },
+      responses: [MATCH_JSON, MATCH_JSON, MATCH_JSON, MATCH_JSON, MATCH_JSON, '招呼语A']
+    });
+    await seedStorage(chrome, baseCfg({}));
+    await runCollectAndWait(chrome);
+    await chrome.panelSend({ type: 'START_DELIVER', jobIds: ['J1'] });
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'done'; }, 8000);
+    // J4 改成同公司，但 OPEN_JD 拿不到 HR 名
+    const jobs = await chrome.storage.local.get('sw_jobs');
+    const j4 = jobs.sw_jobs.find(j => j.id === 'J4');
+    assert.ok(j4);
+    j4.company = '阿里科技有限公司';
+    await chrome.storage.local.set({ sw_jobs: jobs.sw_jobs });
+    await chrome.panelSend({ type: 'RESET' });
+    const callsBefore = fetch._calls.length;
+    await chrome.panelSend({ type: 'START_DELIVER', jobIds: ['J4'] });
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'done'; }, 8000);
+    assert.strictEqual(fetch._calls.length, callsBefore, '同公司且 HR 缺失应被去重拦截，不生成招呼语');
+    const doneLogs = chrome.runtime._runtimeMessages.filter(m => m.type === 'LOG' && /已投过同企业 HR/.test(m.text));
+    assert.ok(doneLogs.length > 0, '应出现去重跳过日志');
+  });
+
+  t('去重不误伤：同公司但两位 HR 都识别到 → 允许再投（不同联系人）', async () => {
+    const { chrome, fetch } = setup({
+      openJdByJob: { J1: { hrName: '王女士' }, J4: { hrName: '李先生' } },
+      responses: [MATCH_JSON, MATCH_JSON, MATCH_JSON, MATCH_JSON, MATCH_JSON, '招呼语A', '招呼语B']
+    });
+    await seedStorage(chrome, baseCfg({}));
+    await runCollectAndWait(chrome);
+    await chrome.panelSend({ type: 'START_DELIVER', jobIds: ['J1'] });
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'done'; }, 8000);
+    const jobs = await chrome.storage.local.get('sw_jobs');
+    const j4 = jobs.sw_jobs.find(j => j.id === 'J4');
+    j4.company = '阿里科技有限公司';
+    await chrome.storage.local.set({ sw_jobs: jobs.sw_jobs });
+    await chrome.panelSend({ type: 'RESET' });
+    const callsBefore = fetch._calls.length;
+    await chrome.panelSend({ type: 'START_DELIVER', jobIds: ['J4'] });
+    await waitFor(async () => { const s = await chrome.panelSend({ type: 'GET_STATE' }); return s && s.phase === 'done'; }, 8000);
+    assert.strictEqual(fetch._calls.length, callsBefore + 1, '不同 HR 应允许再投（多一次招呼语调用）');
+  });
+
   t('投递期注册资金规则：美元注册资金岗位被拦截', async () => {
     const { chrome, fetch } = setup({
       openJdByJob: { J1: { fundText: '注册资本 50万美元', addr: '北京市海淀区' } },

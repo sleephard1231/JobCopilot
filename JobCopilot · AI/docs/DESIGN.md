@@ -39,7 +39,8 @@
 ```
 manifest.json (MV3)
   ├── permissions: storage, tabs, scripting, sidePanel
-  ├── host_permissions: *://*.zhipin.com/*, https://api.deepseek.com/*, *://*/*
+  ├── host_permissions: *://*.zhipin.com/*, https://api.deepseek.com/*, https://opencode.ai/*, https://open.bigmodel.cn/*, https://restapi.amap.com/*
+  ├── optional_host_permissions: *://*/*（自定义 LLM 端点按 origin 动态申请）
   ├── service_worker: src/background.js
   └── content_scripts:
         ├─ /web/geek/job*   → selectors.js + content-search.js

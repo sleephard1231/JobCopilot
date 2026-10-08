@@ -14,6 +14,21 @@
 
   function cacheGet(cache, k) { return Object.prototype.hasOwnProperty.call(cache, k) ? cache[k] : undefined; }
 
+  // 带超时的 JSON 请求：高德无响应时不能让投递流程卡死（失败一律返回 null，由上层放行）
+  async function fetchJson(url, timeoutMs) {
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { try { controller.abort(); } catch (e) {} }, timeoutMs || 10000) : null;
+    try {
+      var resp = await fetch(url, controller ? { signal: controller.signal } : undefined);
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch (e) {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   // 粗粒度匹配级别：模糊命中"某省/某市/某村庄"这类结果对通勤计算毫无意义，
   // 还会把瞎编地址匹配到千里之外误杀岗位 → 一律视为解析失败（上层放行，不误伤）
   var COARSE_LEVELS = { '省': 1, '市': 1, '区县': 1, '乡镇': 1, '村庄': 1 };
@@ -25,15 +40,11 @@
     if (cached !== undefined) return cached;
     var url = AMAP_GEO + '?key=' + encodeURIComponent(key) + '&address=' + encodeURIComponent(addr) + '&output=json';
     var loc = null;
-    try {
-      var resp = await fetch(url);
-      if (!resp.ok) return null;
-      var data = await resp.json();
-      if (data && data.status === '1' && data.geocodes && data.geocodes.length && data.geocodes[0].location) {
-        var g = data.geocodes[0];
-        if (!COARSE_LEVELS[String(g.level || '').trim()]) loc = g.location; // 粗粒度 → 视为解析失败
-      }
-    } catch (e) { return null; }
+    var data = await fetchJson(url, 10000);
+    if (data && data.status === '1' && data.geocodes && data.geocodes.length && data.geocodes[0].location) {
+      var g = data.geocodes[0];
+      if (!COARSE_LEVELS[String(g.level || '').trim()]) loc = g.location; // 粗粒度 → 视为解析失败
+    }
     geoCache[addr] = loc;
     return loc;
   }
@@ -42,17 +53,13 @@
   async function distanceOne(origin, dest, type, key) {
     var url = AMAP_DIST + '?key=' + encodeURIComponent(key) + '&origins=' + encodeURIComponent(origin)
       + '&destination=' + encodeURIComponent(dest) + '&type=' + type + '&output=json';
-    try {
-      var resp = await fetch(url);
-      if (!resp.ok) return null;
-      var data = await resp.json();
-      if (!data || data.status !== '1' || !data.results || !data.results.length) return null;
-      var r = data.results[0];
-      var meters = parseInt(r.distance, 10);
-      var seconds = parseInt(r.duration, 10);
-      if (!isFinite(meters) || !isFinite(seconds)) return null;
-      return { km: Math.round(meters / 100) / 10, min: Math.round(seconds / 60) };
-    } catch (e) { return null; }
+    var data = await fetchJson(url, 10000);
+    if (!data || data.status !== '1' || !data.results || !data.results.length) return null;
+    var r = data.results[0];
+    var meters = parseInt(r.distance, 10);
+    var seconds = parseInt(r.duration, 10);
+    if (!isFinite(meters) || !isFinite(seconds)) return null;
+    return { km: Math.round(meters / 100) / 10, min: Math.round(seconds / 60) };
   }
 
   // 并行取驾车+步行，任一失败返回 null

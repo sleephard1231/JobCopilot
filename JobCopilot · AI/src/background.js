@@ -47,7 +47,14 @@ function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' 
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
 
 // ── 投递节奏与统计（M2）──
-const DEFAULT_PACE = { preSendDelay: [2, 4], postDeliverRest: [5, 8], skipRest: [2, 4], maxPerRun: 30, dailyGoal: 60, pauseOnGoal: true };
+// 默认按"接近人工、宁可慢"的保守节奏：投递后 45-120 秒、单次上限 8、每日 25；
+// 另含工作时段限制、每 N 个长休息、验证通过后冷却，均可在侧边栏"运行策略"调整。
+const DEFAULT_PACE = {
+  preSendDelay: [5, 12], postDeliverRest: [45, 120], skipRest: [2, 4],
+  maxPerRun: 8, dailyGoal: 25, pauseOnGoal: true,
+  workHours: { enabled: false, start: 9, end: 21 },
+  longBreakEvery: 5, longBreakRest: [180, 600], verifyCooldownMin: 10
+};
 const DEFAULT_STAT_GOAL = { monthly: 300 };
 
 function todayKey() {
@@ -83,6 +90,19 @@ async function readPaceAndStats() {
   pace.preSendDelay = clampRange(pace.preSendDelay, DEFAULT_PACE.preSendDelay);
   pace.postDeliverRest = clampRange(pace.postDeliverRest, DEFAULT_PACE.postDeliverRest);
   pace.skipRest = clampRange(pace.skipRest, DEFAULT_PACE.skipRest);
+  // 工作时段 / 长休息 / 验证冷却：缺失或非法一律回退到默认值
+  const whRaw = (pace.workHours && typeof pace.workHours === 'object') ? pace.workHours : {};
+  const clampHour = (v, fb) => { const n = parseInt(v, 10); return isFinite(n) && n >= 0 && n <= 23 ? n : fb; };
+  pace.workHours = {
+    enabled: whRaw.enabled === true,
+    start: clampHour(whRaw.start, DEFAULT_PACE.workHours.start),
+    end: clampHour(whRaw.end, DEFAULT_PACE.workHours.end)
+  };
+  pace.longBreakEvery = parseInt(pace.longBreakEvery, 10);
+  if (!isFinite(pace.longBreakEvery) || pace.longBreakEvery < 0) pace.longBreakEvery = DEFAULT_PACE.longBreakEvery;
+  pace.longBreakRest = clampRange(pace.longBreakRest, DEFAULT_PACE.longBreakRest);
+  pace.verifyCooldownMin = parseInt(pace.verifyCooldownMin, 10);
+  if (!isFinite(pace.verifyCooldownMin) || pace.verifyCooldownMin < 0) pace.verifyCooldownMin = DEFAULT_PACE.verifyCooldownMin;
   return {
     pace: pace,
     goal: Object.assign({}, DEFAULT_STAT_GOAL, d.statGoal || {}),
@@ -129,18 +149,27 @@ async function loadContactHistory() {
   return d.sentContacts || {};
 }
 async function isContactBlocked(company, hrName) {
+  const c = normStr(company);
+  if (!c) return { blocked: false, matchedKey: '' };
   const sent = await loadContactHistory();
   if (!Object.keys(sent).length) return { blocked: false, matchedKey: '' };
-  // 双键都得完全一致（trim 后）
-  const k = contactKey(company, hrName);
-  if (sent[k]) return { blocked: true, matchedKey: k };
+  const h = normStr(hrName);
+  // 1) 精确双键完全一致
+  const exact = contactKey(c, h);
+  if (sent[exact]) return { blocked: true, matchedKey: exact };
+  // 2) 降级：同公司，且本次 HR 或历史条目 HR 有一方为空 → 视为同一联系人（HR 名常抓不到，避免重复打扰）
+  const prefix = c + '｜';
+  for (const k of Object.keys(sent)) {
+    if (k.indexOf(prefix) !== 0) continue;
+    if (!h || !normStr(sent[k] && sent[k].hrName)) return { blocked: true, matchedKey: k };
+  }
   return { blocked: false, matchedKey: '' };
 }
 async function addContactToHistory(company, hrName) {
   const c = normStr(company);
   const h = normStr(hrName);
   if (!c) return; // 没企业名就跳过
-  // HR 名为空也允许写入（部分 BOSS 岗位不显示 HR），但匹配时公司相同的视为同一条目
+  // HR 名为空也允许写入（部分 BOSS 岗位不显示 HR）；匹配时同公司且任一方 HR 为空视为同一条目
   const d = await chrome.storage.local.get(['sentContacts']);
   const sent = d.sentContacts || {};
   const key = contactKey(c, h);
@@ -151,6 +180,17 @@ async function addContactToHistory(company, hrName) {
   if (!meta.firstSentAt) meta.firstSentAt = now;
   meta.lastSentAt = now;
   await chrome.storage.local.set({ sentContacts: sent });
+}
+
+// OpenCode Go/Zen 网关要求携带稳定的 x-opencode-session 才能路由：缺失会返回 400 MissingSessionID
+// 值是任意 opaque 字符串，这里生成一次并持久化，保证同一浏览器会话稳定
+let _ocSessionId = null;
+async function opencodeSessionId() {
+  if (_ocSessionId) return _ocSessionId;
+  try { const s = await chrome.storage.local.get('ocSessionId'); if (s && s.ocSessionId) { _ocSessionId = s.ocSessionId; return _ocSessionId; } } catch (e) {}
+  _ocSessionId = 'jobcopilot-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  try { await chrome.storage.local.set({ ocSessionId: _ocSessionId }); } catch (e) {}
+  return _ocSessionId;
 }
 
 // ── 自定义 LLM(OpenAI 兼容协议) ──
@@ -167,16 +207,38 @@ async function callLLM(messages, maxTokens, opts) {
   if (opts && opts.json) body.response_format = { type: 'json_object' };
   // 思考型模型默认会先"思考"再答，reasoning 会吃掉 max_tokens 导致正文被截断 → 显式关闭
   if (opts && opts.noThink && /deepseek|glm/i.test(model)) body.thinking = { type: 'disabled' };
+  // 超时保护：端点无响应时不能让整轮收集/投递永久挂起（STOP 也无法取消在途 fetch）
+  const timeoutMs = (opts && opts.timeoutMs) || 90000;
+  const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => { try { controller.abort(); } catch (e) {} }, timeoutMs) : null;
   let resp;
   try {
-    resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey, 'x-opencode-session': 'xiaobei-extension-v1' },
-      body: JSON.stringify(body)
-    });
-  } catch (e) {
-    // fetch 直接抛 TypeError 多为：无网络 / 该域名未授权（host_permissions 收紧后自定义端点需在面板授权）
-    throw new Error('无法连接接口（' + (e.message || '网络错误') + '）：请检查网络，或回到面板点「保存设置」重新授权自定义接口域名');
+    // 限流/暂时不可用：最多重试 2 次（退避 1s、2s），其余状态码只试一次
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
+        if (/opencode\.ai/i.test(endpoint)) headers['x-opencode-session'] = await opencodeSessionId();
+        resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(body),
+          signal: controller ? controller.signal : undefined
+        });
+      } catch (e) {
+        if (controller && controller.signal.aborted) {
+          throw new Error('接口超时（' + Math.round(timeoutMs / 1000) + ' 秒无响应）：请检查网络或接口地址后重试');
+        }
+        // fetch 直接抛 TypeError 多为：无网络 / 该域名未授权（host_permissions 收紧后自定义端点需在面板授权）
+        throw new Error('无法连接接口（' + (e.message || '网络错误') + '）：请检查网络，或回到面板点「保存设置」重新授权自定义接口域名');
+      }
+      if ((resp.status === 429 || resp.status === 503) && attempt < 2) {
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
+      break;
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (!resp.ok) { const t = await resp.text().catch(() => ''); throw new Error('API ' + resp.status + ': ' + t.slice(0, 200)); }
   const data = await resp.json();
@@ -305,12 +367,27 @@ function pauseForVerify(url) {
   log('   请在浏览器标签页手动完成滑块/验证，完成后回到面板点「继续」', 'warn');
   chrome.runtime.sendMessage({ type: 'VERIFY_REQUIRED' }).catch(() => {});
 }
+// 验证通过后的强制冷却：刚过验证就立刻高频操作极易二次触发风控
+async function cooldownAfterVerify() {
+  let mins = 0;
+  try { const ps = await readPaceAndStats(); mins = ps.pace.verifyCooldownMin || 0; } catch (e) {}
+  if (!(mins > 0)) return;
+  log('🧊 安全验证已通过，冷却 ' + mins + ' 分钟后自动继续（可点「停止」取消）', 'warn');
+  // 用有限次 sleep 计时而非 Date.now()：生产环境每次 1 秒共 mins 分钟，测试沙箱定时器被钳制也不会卡死
+  for (let i = 0; i < mins * 60; i++) {
+    if (state.aborted) return;
+    if (state.paused) { await waitIfPaused(); if (state.aborted) return; }
+    await sleep(1000);
+  }
+}
 // 验证页等待：返回 true=用户点了停止；false=验证已恢复（或用户关闭了检测）
 async function waitOutVerify(tabId) {
   if (!verifyGuardOn()) return false;
+  let recovered = false; // 本次调用确实观察到过验证页，恢复后才执行冷却
   for (;;) {
     const u = await curUrl(tabId);
-    if (!isVerifyUrl(u)) return false;
+    if (!isVerifyUrl(u)) { if (recovered) await cooldownAfterVerify(); return false; }
+    recovered = true;
     pauseForVerify(u);
     await waitIfPaused();
     if (state.aborted) return true;
@@ -326,11 +403,13 @@ async function checkVerifyTab(tabId) {
 // 探测 content script 是否已注入并可响应（页面刚加载完成后的就绪判断）
 async function contentReady(tabId, file, timeout) {
   const t0 = Date.now();
+  let verifySeen = false; // DOM 检测到过验证组件，恢复后同样要冷却
   for (;;) {
     const r = await sendToTab(tabId, { type: 'PING' });
     if (r && r.success) {
       // 页面内出现验证码组件（URL 可能没变）：同样暂停等人工处理
-      if (r.verify && verifyGuardOn()) { pauseForVerify('页面出现验证码组件'); await waitIfPaused(); if (state.aborted) return false; continue; }
+      if (r.verify && verifyGuardOn()) { verifySeen = true; pauseForVerify('页面出现验证码组件'); await waitIfPaused(); if (state.aborted) return false; continue; }
+      if (verifySeen) await cooldownAfterVerify();
       return true;
     }
     await ensureInjected(tabId, file);
@@ -338,11 +417,40 @@ async function contentReady(tabId, file, timeout) {
     await sleep(300);
   }
 }
-async function ensureTab(url) {
-  let tabs = await chrome.tabs.query({ url: '*://*.zhipin.com/*' });
-  let tab = tabs[0];
-  if (!tab) tab = await chrome.tabs.create({ url: url });
+// 复用本插件自己创建/接管的标签页，绝不劫持用户正在浏览的 BOSS 页面
+// tabId 存 storage.session：MV3 SW 会被回收，内存丢失后仍能找回上次那个页，避免每次运行都新开 tab
+let bossTabId = null;
+async function loadTabId() {
+  if (bossTabId != null) return bossTabId;
+  try {
+    if (chrome.storage && chrome.storage.session) {
+      const d = await chrome.storage.session.get('bossTabId');
+      if (d && d.bossTabId != null) bossTabId = d.bossTabId;
+    }
+  } catch (e) {}
+  return bossTabId;
+}
+async function saveTabId(id) {
+  bossTabId = id;
+  try { if (chrome.storage && chrome.storage.session) await chrome.storage.session.set({ bossTabId: id }); } catch (e) {}
+}
+function getTabById(id) {
+  return new Promise(res => chrome.tabs.get(id, t => res(chrome.runtime.lastError ? null : (t || null))));
+}
+function isZhipinUrl(u) { return /^https?:\/\/([^/]*\.)?zhipin\.com\//i.test(String(u || '')); }
+async function acquireTab(url) {
+  let tab = null;
+  const id = await loadTabId();
+  if (id != null) {
+    tab = await getTabById(id);
+    if (!tab || !isZhipinUrl(tab.url)) tab = null; // 自己那个页被关了/被导航走了 → 新建
+  }
+  if (!tab) { tab = await chrome.tabs.create({ url: url }); await saveTabId(tab.id); }
   else await chrome.tabs.update(tab.id, { url: url });
+  return tab;
+}
+async function ensureTab(url) {
+  const tab = await acquireTab(url);
   await waitTabComplete(tab.id);
   if (await waitOutVerify(tab.id)) return tab; // 命中安全验证页：暂停等人工处理
   const ready = await contentReady(tab.id, 'src/content-search.js', 2500);
@@ -458,6 +566,18 @@ async function runDeliver(jobIds) {
   const todayOk0 = todayOkOf(ps.stats);
   const quota = Math.min(pace.maxPerRun, Math.max(0, pace.dailyGoal - todayOk0));
 
+  // 工作时段限制：避免凌晨/非工作时段批量操作这种极不自然的账号行为
+  if (pace.workHours && pace.workHours.enabled) {
+    const h = new Date().getHours();
+    const ws = pace.workHours.start, we = pace.workHours.end;
+    const inHours = ws <= we ? (h >= ws && h < we) : (h >= ws || h < we);
+    if (!inHours) {
+      log('当前 ' + h + ' 点不在工作时段（' + ws + ':00-' + we + ':00），已停止本轮投递。可在"运行策略"调整或关闭限制', 'warn');
+      finishDeliver('hours');
+      return;
+    }
+  }
+
   const ids = (jobIds || []).filter(id => !state.processed[id]);
   if (!ids.length) { log('没有可投递的岗位（可能已投过，可点重置）', 'warn'); finishDeliver(); return; }
   if (quota <= 0) {
@@ -466,7 +586,7 @@ async function runDeliver(jobIds) {
     return;
   }
   log('本轮配额：' + quota + ' 个（单次上限 ' + pace.maxPerRun + ' · 今日 ' + todayOk0 + '/' + pace.dailyGoal + '）');
-  if (pace.postDeliverRest[0] < 5) log('⚠ 投递间隔低于 5 秒，账号风控风险较高，建议至少 5-8 秒', 'warn');
+  if (pace.postDeliverRest[0] < 30) log('⚠ 投递间隔低于 30 秒，账号风控风险较高，建议至少 45-120 秒', 'warn');
   const searchUrl = buildSearchUrl(cfg);
 
   let deliveredThisRun = 0;
@@ -597,18 +717,29 @@ async function runDeliver(jobIds) {
     log('  发简历图片 + 招呼语...');
     const r = await sendToTab(tab.id, { type: 'SEND_ACTIVE', image: cfg.resumeImage || '', greeting: greeting });
     let failedTrip = false;
-    if (r && r.success) { recordOk(job); state.processed[job.id] = 1; deliveredThisRun++; await chrome.storage.local.set({ processed: state.processed }); log('  ✓ 投递成功' + (job.hrName ? '（HR: ' + job.hrName + '）' : ''), 'success'); }
-    else { failedTrip = recordFail(job, (r && r.error) || '发送失败'); log('  失败：' + (r && r.error), 'error'); }
+    if (r && r.success) {
+      await recordOk(job); // 等待联系人落盘，避免紧接着的下一轮去重读到旧数据
+      state.processed[job.id] = 1; deliveredThisRun++;
+      await chrome.storage.local.set({ processed: state.processed });
+      log('  ✓ 投递成功' + (job.hrName ? '（HR: ' + job.hrName + '）' : ''), 'success');
+      if (r.imageConfirmed === false) log('  ⚠ 简历图片未能确认送达，建议抽查该会话', 'warn');
+    } else { failedTrip = recordFail(job, (r && r.error) || '发送失败'); log('  失败：' + (r && r.error), 'error'); }
     progress(k + 1, ids.length, '投递');
     if (failedTrip) { finishDeliver('failstreak'); return; }
     await rand(pace.postDeliverRest[0] * 1000, pace.postDeliverRest[1] * 1000);
+    // 长休息：每投 N 个停一段较长时间，避免连续高频批量建联
+    if (pace.longBreakEvery > 0 && deliveredThisRun > 0 && deliveredThisRun % pace.longBreakEvery === 0) {
+      log('  ☕ 已连续投 ' + deliveredThisRun + ' 个，长休息 ' + pace.longBreakRest[0] + '-' + pace.longBreakRest[1] + ' 秒后再继续', 'info');
+      await rand(pace.longBreakRest[0] * 1000, pace.longBreakRest[1] * 1000);
+    }
   }
   finishDeliver();
 }
-function recordOk(job) {
+async function recordOk(job) {
   state.results.push({ id: job.id, name: job.name, ok: true });
   state.consecFail = 0; // 成功一次即清零熔断计数
-  if (job && job.company) addContactToHistory(job.company, job.hrName || '').catch(() => {});
+  // 关键：等联系人写入完成再继续，否则用户快速再投时去重会漏判导致重复发送
+  try { if (job && job.company) await addContactToHistory(job.company, job.hrName || ''); } catch (e) {}
   bumpStat('ok');
 }
 // 记录失败并累计连续失败；达到阈值返回 true，调用方据此熔断收尾
