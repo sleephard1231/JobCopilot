@@ -107,8 +107,11 @@ function makeChrome(opts) {
     query(q, cb) { const r = [{ id: 1, url: opts.tabUrl || 'https://www.zhipin.com/web/geek/jobs?query=x', status: 'complete' }]; if (cb) { setImmediate(() => cb(r)); return; } return Promise.resolve(r); },
     create(t, cb) { const r = Object.assign({ id: 1, status: 'complete', url: (t && t.url) || '' }, {}); if (cb) { setImmediate(() => cb(r)); return; } return Promise.resolve(r); },
     update(id, props, cb) { const r = { id, status: 'complete', url: (props && props.url) || '' }; if (cb) { setImmediate(() => cb(r)); return; } return Promise.resolve(r); },
-    get(id, cb) { setImmediate(() => cb({ id, status: 'complete', url: opts.chatUrl || 'https://www.zhipin.com/web/geek/chat/1001' })); },
-    sendMessage(tabId, msg, cb) { setImmediate(() => cb(contentHandler(tabId, msg))); },
+    // get / sendMessage 同步回调：与真实 chrome.* 异步语义略有出入，但保证测试确定性——
+    // SW 侧 sendToTab/waitTabComplete 用超时兜底，若回调走 setImmediate 会与钳制到 1ms 的
+    // setTimeout 竞态，导致偶发"页面响应超时"误判
+    get(id, cb) { cb({ id, status: 'complete', url: opts.chatUrl || 'https://www.zhipin.com/web/geek/chat/1001' }); },
+    sendMessage(tabId, msg, cb) { cb(contentHandler(tabId, msg)); },
     onUpdated: { addListener() {}, removeListener() {} },
     _setContentHandler(fn) { contentHandler = fn; }
   };
@@ -119,7 +122,7 @@ function makeChrome(opts) {
     _injected: injected
   };
 
-  const alarms = { create() {}, onAlarm: { addListener() {} } };
+  const alarms = { create() {}, clear() {}, get() {}, onAlarm: { addListener() {} } };
   const sidePanel = { setPanelBehavior: () => Promise.resolve() };
 
   // 侧边栏 → SW：调用 SW 注册的 onMessage 监听器并等待 sendResponse

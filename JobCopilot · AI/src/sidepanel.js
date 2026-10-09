@@ -224,6 +224,8 @@ function collectFilterCfg() {
     inviteMax: parseInt($('inviteMax').value, 10) || 0,
     kwMode: $('kwMode').value,
     keywords: $('fKeywords').value,
+    hardExclude: $('hardExclude') ? $('hardExclude').value : '',
+    screenLevel: $('screenLevel') ? $('screenLevel').value : 'balanced',
     skipUsdFund: $('skipUsdFund').checked,
     fundMin: parseInt($('fundMin').value, 10) || 0,
     commute: collectCommuteCfg(),
@@ -274,6 +276,8 @@ function applyFilterCfgToUI(c) {
   $('inviteMax').value = c.inviteMax > 0 ? c.inviteMax : '';
   $('kwMode').value = c.kwMode || 'off';
   $('fKeywords').value = Array.isArray(c.keywords) ? c.keywords.join(', ') : (c.keywords || '');
+  if ($('hardExclude')) $('hardExclude').value = Array.isArray(c.hardExclude) ? c.hardExclude.join(', ') : (c.hardExclude || '');
+  if ($('screenLevel')) $('screenLevel').value = c.screenLevel || 'balanced';
   $('skipUsdFund').checked = !!c.skipUsdFund;
   $('fundMin').value = c.fundMin > 0 ? c.fundMin : '';
   applyCommuteCfgToUI(c.commute);
@@ -312,8 +316,56 @@ if (filterBodyEl) filterBodyEl.addEventListener('change', refreshCardSummary);
 
 // ===== 运行控制 =====
 let isPaused = false;
+let watchdogTimer = null;
+const WATCHDOG_INTERVAL_MS = 5000;
 const PAUSE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg><span>暂停</span>';
 const RESUME_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>继续</span>';
+
+// ===== 投递看门狗：SW 可能在长休中被回收，靠轮询发现"后台已不在投递"并提示续投 =====
+function startWatchdog() {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
+  if (watchdogTimer && watchdogTimer.unref) watchdogTimer.unref(); // 测试环境：不阻塞进程退出
+}
+function stopWatchdog() {
+  if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
+}
+function watchdogTick() {
+  if (isPaused) return; // 用户主动暂停，属正常
+  chrome.storage.local.get('deliverRun', (d) => {
+    const run = d && d.deliverRun;
+    if (!run || !run.active) { stopWatchdog(); return; }
+    chrome.runtime.sendMessage({ type: 'GET_STATE' }, (resp) => {
+      if (chrome.runtime.lastError) {
+        // 后台无响应：交给后台 alarms 自动续投；若不可用则提示手动续投
+        showResumeBanner(run.jobIds || []);
+        return;
+      }
+      if (resp && resp.phase === 'delivering') { hideResumeBanner(); return; } // 正常投递中
+      showResumeBanner(run.jobIds || []); // 面板以为在投递，后台却已停 → 中断
+    });
+  });
+}
+function showResumeBanner(ids) {
+  let b = document.getElementById('resumeBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'resumeBanner';
+    b.className = 'verify-banner';
+    b.onclick = () => {
+      const list = JSON.parse(b.dataset.ids || '[]');
+      b.remove();
+      if (!list.length) return;
+      setStep(3); setRunning(true);
+      addLog('▶ 继续投递剩余 ' + list.length + ' 个岗位', 'info');
+      chrome.runtime.sendMessage({ type: 'START_DELIVER', jobIds: list }, (resp) => { if (resp && resp.ok === false) setRunning(false); });
+    };
+    document.body.insertBefore(b, document.body.firstChild);
+  }
+  b.dataset.ids = JSON.stringify(ids || []);
+  b.textContent = '⚠ 投递疑似中断，点击继续剩余 ' + (ids || []).length + ' 个岗位';
+}
+function hideResumeBanner() { const b = document.getElementById('resumeBanner'); if (b) b.remove(); }
 
 $('btnCollect').addEventListener('click', async () => {
   if (!guardAlive()) return;
@@ -373,6 +425,7 @@ function setRunning(running) {
   $('btnStop').disabled = !running;
   $('statusDot').className = 'status-dot' + (running ? ' running' : '');
   $('headerStatus').textContent = running ? '运行中' : '就绪';
+  if (running) { startWatchdog(); } else { stopWatchdog(); hideResumeBanner(); }
   if (!running) {
     isPaused = false;
     $('btnPause').innerHTML = PAUSE_ICON;
@@ -425,30 +478,31 @@ function hideVerifyBanner() {
   if (b) b.remove();
 }
 
-// ===== 审核列表 =====
+// ===== 审核列表：匹配的按 AI 契合度从高到低排序，方便优先投高分岗 =====
 function renderReview(screened) {
-  const matched = screened.filter(j => j.match);
-  const skipped = screened.filter(j => !j.match);
+  const byScore = (a, b) => (b.score || 0) - (a.score || 0);
+  const isRule = j => String(j.reason || '').indexOf('规则：') === 0;
+  const matched = screened.filter(j => j.match).sort(byScore);
+  const aiSkipped = screened.filter(j => !j.match && !isRule(j)).sort(byScore);
+  const ruleSkipped = screened.filter(j => !j.match && isRule(j));
+  const ordered = matched.concat(aiSkipped, ruleSkipped);
   $('reviewCount').textContent = matched.length + ' / ' + screened.length;
+
+  const badge = j => (typeof j.score === 'number' && isFinite(j.score))
+    ? '<span class="job-score' + (j.score >= 70 ? ' hi' : (j.score >= 40 ? ' mid' : ' lo')) + '">' + j.score + '</span>' : '';
+  const flags = j => (Array.isArray(j.flags) && j.flags.length)
+    ? '<div class="job-flags">' + esc(j.flags.join('、')) + '</div>' : '';
+
   let html = '';
-  matched.forEach(j => {
-    html += '<div class="job-item">'
-      + '<input type="checkbox" checked data-id="' + esc(j.id) + '">'
+  ordered.forEach(j => {
+    const rule = isRule(j);
+    html += '<div class="job-item' + (j.match ? '' : (rule ? ' skip' : ' nomatch')) + '">'
+      + '<input type="checkbox"' + (j.match ? ' checked' : (rule ? ' disabled' : '')) + ' data-id="' + esc(j.id) + '">'
       + '<div class="job-main">'
-      + '<div class="job-title">' + esc(j.name) + '</div>'
+      + '<div class="job-title">' + badge(j) + esc(j.name) + '</div>'
       + '<div class="job-sub">' + esc(j.company) + ' · ' + esc(j.salary) + '</div>'
-      + '<span class="job-reason m">✓ ' + esc(j.reason) + '</span>'
-      + '</div></div>';
-  });
-  skipped.forEach(j => {
-    // AI 判不匹配的仍可手动勾选投递；规则主动剔除的保持禁用（避免误投黑名单等）
-    const isRule = String(j.reason || '').indexOf('规则：') === 0;
-    html += '<div class="job-item ' + (isRule ? 'skip' : 'nomatch') + '">'
-      + '<input type="checkbox"' + (isRule ? ' disabled' : '') + ' data-id="' + esc(j.id) + '">'
-      + '<div class="job-main">'
-      + '<div class="job-title">' + esc(j.name) + '</div>'
-      + '<div class="job-sub">' + esc(j.company) + ' · ' + esc(j.salary) + '</div>'
-      + '<span class="job-reason s">✗ ' + esc(j.reason) + '</span>'
+      + '<span class="job-reason ' + (j.match ? 'm' : 's') + '">' + (j.match ? '✓ ' : '✗ ') + esc(j.reason) + '</span>'
+      + flags(j)
       + '</div></div>';
   });
   $('reviewList').innerHTML = html || '<div class="job-sub" style="text-align:center;padding:20px">暂无岗位数据</div>';
@@ -672,7 +726,7 @@ function loadPaceUI() {
 
 $('btnSavePace').addEventListener('click', () => {
   chrome.storage.local.get('paceConfig', (d) => {
-    const p = Object.assign({ preSendDelay: [5, 12], postDeliverRest: [45, 120], skipRest: [2, 4], maxPerRun: 8, dailyGoal: 25, pauseOnGoal: true, workHours: { enabled: false, start: 9, end: 21 }, longBreakEvery: 5, longBreakRest: [180, 600], verifyCooldownMin: 10 }, d.paceConfig || {});
+    const p = Object.assign({ preSendDelay: [3, 6], postDeliverRest: [20, 40], skipRest: [1, 3], maxPerRun: 41, dailyGoal: 60, pauseOnGoal: true, workHours: { enabled: false, start: 9, end: 21 }, longBreakEvery: 10, longBreakRest: [60, 150], verifyCooldownMin: 5 }, d.paceConfig || {});
     p.maxPerRun = parseInt($('maxPerRun').value, 10) || p.maxPerRun;
     p.dailyGoal = parseInt($('dailyGoal').value, 10) || p.dailyGoal;
     p.pauseOnGoal = $('pauseOnGoal').checked;

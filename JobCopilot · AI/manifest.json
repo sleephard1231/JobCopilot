@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "小北智能招聘",
-  "version": "3.0",
+  "version": "3.1",
   "description": "小北智能招聘：基于 LLM 的智能求职助手，AI 岗位匹配 + 千岗千面招呼语 + 自动投递",
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "action": { "default_title": "小北智能招聘" },
   "side_panel": { "default_path": "src/sidepanel.html" },
-  "permissions": ["storage", "tabs", "scripting", "sidePanel"],
+  "permissions": ["storage", "tabs", "scripting", "sidePanel", "alarms"],
   "host_permissions": [
     "*://*.zhipin.com/*",
     "https://api.deepseek.com/*",

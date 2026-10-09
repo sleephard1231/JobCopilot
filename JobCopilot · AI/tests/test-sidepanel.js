@@ -96,6 +96,8 @@ define('sidepanel.js 侧边栏逻辑', t => {
     r.actOnline.checked = true; r.actWeek.checked = false; r.actMonth.checked = false;
     r.inviteMax.value = '100';
     r.kwMode.value = 'exclude'; r.fKeywords.value = '销售, 前台';
+    r.hardExclude.value = '驻场, 地推';
+    r.screenLevel.value = 'strict';
     r.skipUsdFund.checked = true; r.fundMin.value = '50';
     const cfg = env.ctx.collectFilterCfg();
     assert.strictEqual(cfg.listMode, 'black');
@@ -108,6 +110,8 @@ define('sidepanel.js 侧边栏逻辑', t => {
     assert.strictEqual(cfg.inviteMax, 100);
     assert.strictEqual(cfg.kwMode, 'exclude');
     assert.strictEqual(cfg.keywords, '销售, 前台');
+    assert.strictEqual(cfg.hardExclude, '驻场, 地推');
+    assert.strictEqual(cfg.screenLevel, 'strict');
     assert.strictEqual(cfg.skipUsdFund, true);
     assert.strictEqual(cfg.fundMin, 50);
     assert.strictEqual(cfg.jobHandle, 'collect');
@@ -121,7 +125,7 @@ define('sidepanel.js 侧边栏逻辑', t => {
       listMode: 'white', whitelist: [{ name: '目标公司', mode: 'keyword' }], blacklist: [],
       salary: { min: 10, max: 0 }, cities: '北京', addrExclude: '',
       active: { online: false, week: true, month: false },
-      inviteMax: 0, kwMode: 'off', keywords: '', skipUsdFund: false, fundMin: 0, jobHandle: 'skip'
+      inviteMax: 0, kwMode: 'off', keywords: '', hardExclude: ['外包', '驻场'], screenLevel: 'loose', skipUsdFund: false, fundMin: 0, jobHandle: 'skip'
     };
     env.ctx.applyFilterCfgToUI(cfg);
     const r = env.doc.registry;
@@ -134,6 +138,8 @@ define('sidepanel.js 侧边栏逻辑', t => {
     assert.strictEqual(r.fCities.value, '北京');
     assert.strictEqual(r.actWeek.checked, true);
     assert.strictEqual(r.inviteMax.value, '');
+    assert.strictEqual(r.hardExclude.value, '外包, 驻场');
+    assert.strictEqual(r.screenLevel.value, 'loose');
     assert.strictEqual(env.selRegistry['input[name="jobHandle"]'][0].checked, true);
   });
 
@@ -202,6 +208,20 @@ define('sidepanel.js 侧边栏逻辑', t => {
     assert.ok(html.indexOf('job-item nomatch') >= 0, 'AI 不匹配项应为 nomatch 样式');
     assert.ok(/<input type="checkbox" data-id="2">/.test(html), 'AI 不匹配项应可勾选（无 disabled）');
     assert.ok(/<input type="checkbox" disabled data-id="3">/.test(html), '规则剔除项应保持 disabled');
+  });
+
+  t('renderReview：按 AI 契合度排序并显示分数徽章/不符点', async () => {
+    const chrome = makeChrome();
+    const env = loadSidepanel(chrome);
+    await waitFor(() => env.doc.registry.apiBaseUrl.value !== '');
+    env.ctx.renderReview([
+      { id: '1', name: '低分岗', company: 'A', salary: '5-8K', match: true, reason: '一般', score: 30, flags: [] },
+      { id: '2', name: '高分岗', company: 'B', salary: '10-15K', match: true, reason: '很匹配', score: 90, flags: ['学历偏高'] }
+    ]);
+    const html = env.doc.registry.reviewList.innerHTML;
+    assert.ok(html.indexOf('job-score hi') >= 0 && html.indexOf('>90<') >= 0, '应显示高分徽章');
+    assert.ok(html.indexOf('高分岗') < html.indexOf('低分岗'), '高分岗应排在前面');
+    assert.ok(html.indexOf('job-flags') >= 0 && html.indexOf('学历偏高') >= 0, '应展示不符点');
   });
 
   t('加载已有 filterConfig：UI 自动回填', async () => {
@@ -338,7 +358,7 @@ define('sidepanel.js 侧边栏逻辑', t => {
     assert.strictEqual(p.pauseOnGoal, false);
     assert.deepStrictEqual(JSON.parse(JSON.stringify(p.postDeliverRest)), [15, 30], '休息区间生效');
     assert.deepStrictEqual(JSON.parse(JSON.stringify(p.preSendDelay)), [3, 6], '等待区间自动排序 min-max');
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(p.skipRest)), [2, 4], '未填写的区间保留默认');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(p.skipRest)), [1, 3], '未填写的区间保留默认');
   });
 
   t('节奏 UI 回填：已保存配置显示区间', async () => {
@@ -394,5 +414,25 @@ define('sidepanel.js 侧边栏逻辑', t => {
     env.ctx.renderRuleStats([{ rule: '黑名单', count: 3 }]);
     const html = env.doc.registry.ruleStats.innerHTML;
     assert.ok(html.indexOf('黑名单') >= 0 && html.indexOf('×3') >= 0, '应正常渲染规则与数量');
+  });
+
+  t('投递看门狗：后台已不在投递时弹出续投横幅', async () => {
+    const chrome = makeChrome();
+    const env = loadSidepanel(chrome);
+    await waitFor(() => env.doc.registry.apiBaseUrl.value !== '');
+    await chrome.storage.local.set({ deliverRun: { jobIds: ['A', 'B'], active: true, at: Date.now() } });
+    env.ctx.watchdogTick();
+    await waitFor(() => (env.doc.body._inserted || []).some(e => e.id === 'resumeBanner'));
+    const banner = env.doc.body._inserted.find(e => e.id === 'resumeBanner');
+    assert.ok(/继续剩余 2 个岗位/.test(banner.textContent), '横幅应显示剩余岗位数');
+  });
+
+  t('投递看门狗：无进行中任务时不弹横幅', async () => {
+    const chrome = makeChrome();
+    const env = loadSidepanel(chrome);
+    await waitFor(() => env.doc.registry.apiBaseUrl.value !== '');
+    env.ctx.watchdogTick();
+    await new Promise(r => setTimeout(r, 30));
+    assert.ok(!(env.doc.body._inserted || []).some(e => e.id === 'resumeBanner'), '不应弹横幅');
   });
 });

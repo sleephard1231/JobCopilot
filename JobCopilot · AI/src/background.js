@@ -8,7 +8,8 @@ const RESUME_TEXT = ''; // 不内置任何个人简历，由用户在设置页"�
 let state = {
   phase: 'idle', paused: false, aborted: false,
   verifyPending: false, consecFail: 0,
-  jobs: [], screened: [], greetings: {}, results: [], processed: {}
+  jobs: [], screened: [], greetings: {}, results: [], processed: {},
+  runActive: false, runJobIds: []
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -24,7 +25,6 @@ const sleep = (ms) => new Promise(r => {
   const iv = setInterval(() => { try { if (chrome.runtime.getPlatformInfo) chrome.runtime.getPlatformInfo(() => {}); } catch (e) {} }, 20000);
   setTimeout(finish, ms);
 });
-const rand = (a, b) => sleep(a + Math.random() * (b - a));
 function log(text, level) { chrome.runtime.sendMessage({ type: 'LOG', text: text, level: level || 'info' }).catch(() => {}); }
 function pushPhase(reason) { chrome.runtime.sendMessage(Object.assign({ type: 'PHASE', phase: state.phase }, reason ? { reason: reason } : {})).catch(() => {}); }
 function progress(cur, total, label) { chrome.runtime.sendMessage({ type: 'PROGRESS', cur: cur, total: total, label: label || '' }).catch(() => {}); }
@@ -35,6 +35,61 @@ async function waitIfPaused() {
     await sleep(400);
   }
 }
+
+// ── 分段等待 / 心跳 / 看门狗：防止 MV3 SW 在长休中被回收后"静默停摆" ──
+const WAIT_CHUNK_MS = 30000;          // 单段等待上限 30 秒，远低于 SW "单活动 5 分钟"回收线
+const RUN_STALE_MS = 90000;           // 心跳超 90 秒未更新即视为中断
+const RUN_MAX_AGE_MS = 15 * 60 * 1000; // 超过 15 分钟的陈旧任务不再自动续投（如隔天启动）
+function randMs(range) { const a = range[0] * 1000, b = range[1] * 1000; return a + Math.random() * (b - a); }
+// 分段等待：按请求时长递减（不依赖 Date.now，测试沙箱钳制定时器时也能瞬间跑完）；
+// 每段刷新心跳并打印倒计时，暂停/停止即时响应
+async function pacedWait(ms, label) {
+  let remain = Math.max(0, Math.round(ms || 0));
+  if (remain <= 0) return;
+  if (label) log('⏳ ' + label + '（约 ' + Math.round(remain / 1000) + ' 秒）', 'info');
+  while (remain > 0 && !state.aborted) {
+    if (state.paused) { await waitIfPaused(); if (state.aborted) return; }
+    const step = Math.min(remain, WAIT_CHUNK_MS);
+    await sleep(step);
+    remain -= step;
+    if (state.aborted) return;
+    beatHeartbeat();
+    if (remain > 0) log('   ⏳ 剩余约 ' + Math.ceil(remain / 1000) + ' 秒…', 'info');
+  }
+}
+// 投递心跳：写入 storage，供侧边栏看门狗与 alarms 自动续投判断"是否还活着"
+function beatHeartbeat() {
+  if (!state.runActive) return;
+  try { chrome.storage.local.set({ deliverRun: { jobIds: state.runJobIds || [], active: true, at: Date.now() } }); } catch (e) {}
+}
+function markRunStart(jobIds) {
+  state.runActive = true; state.runJobIds = (jobIds || []).slice();
+  beatHeartbeat();
+  try { if (chrome.alarms) chrome.alarms.create('deliverWatchdog', { periodInMinutes: 1 }); } catch (e) {}
+}
+function markRunEnd() {
+  state.runActive = false; state.runJobIds = [];
+  try { chrome.storage.local.set({ deliverRun: { jobIds: [], active: false, at: Date.now() } }); } catch (e) {}
+  try { if (chrome.alarms) chrome.alarms.clear('deliverWatchdog'); } catch (e) {}
+}
+// SW 曾因长等待被回收：alarm 唤醒后自动续投剩余岗位（心跳陈旧 + 本进程空闲才触发，避免重复投）
+let watchdogBusy = false;
+async function deliverWatchdogTick() {
+  if (watchdogBusy) return;
+  watchdogBusy = true;
+  try {
+    const d = await chrome.storage.local.get('deliverRun');
+    const run = d && d.deliverRun;
+    if (!run || !run.active) { try { if (chrome.alarms) chrome.alarms.clear('deliverWatchdog'); } catch (e) {} return; }
+    const age = Date.now() - (run.at || 0);
+    if (age > RUN_MAX_AGE_MS) { log('上次投递任务已过期（' + Math.round(age / 60000) + ' 分钟无心跳），不再自动续投', 'warn'); markRunEnd(); return; }
+    if (age < RUN_STALE_MS) return;      // 心跳新鲜，仍在正常等待
+    if (BUSY_PHASES[state.phase]) return; // 本进程还在投递
+    if (state.paused) return;             // 用户主动暂停
+    log('⚠ 检测到上一轮投递中断（' + Math.round(age / 1000) + ' 秒无心跳），自动继续剩余 ' + ((run.jobIds || []).length) + ' 个岗位', 'warn');
+    runDeliver(run.jobIds || []).catch(e => { log('✗ 自动续投异常：' + ((e && e.message) || e), 'error'); state.phase = 'idle'; pushPhase(); });
+  } catch (e) {} finally { watchdogBusy = false; }
+}
 function getCfg() { return chrome.storage.local.get(['apiBaseUrl', 'apiKey', 'apiModel', 'resumeText', 'resumeImage', 'city', 'keyword', 'count', 'filterConfig', 'greetingTemplate', 'riskConfig']); }
 function riskOf(cfg) {
   const r = (cfg && cfg.riskConfig) || {};
@@ -43,17 +98,39 @@ function riskOf(cfg) {
 }
 function filterCfg(cfg) { return BPFilters.normalize(cfg.filterConfig || BPFilters.DEFAULT_FILTER); }
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
-function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || ''); }
+// 从卡片技能标签里分离出"经验要求""学历要求"，喂给 AI 时单列，判断更准
+const EXP_PAT = /应届|经验不限|无经验|不限经验|\d+\s*年(?:以内|以下|以上|经验)?|\d+\s*[-–~]\s*\d+\s*年/;
+const EDU_PAT = /学历不限|初中|中专|中技|高中|大专|本科|硕士|研究生|博士|MBA/;
+function parseExpEdu(tags) {
+  const list = (tags || []).map(t => String(t || '').trim()).filter(Boolean);
+  return {
+    exp: list.find(t => EXP_PAT.test(t)) || '',
+    edu: list.find(t => EDU_PAT.test(t)) || ''
+  };
+}
+// 喂给 AI 的岗位画像：尽量把卡片能拿到的信息都给全（多几十 token，换来判断更准）
+function jobInfo(j) {
+  const ee = parseExpEdu(j.tags);
+  return [
+    '岗位：' + (j.name || ''),
+    '公司：' + (j.company || ''),
+    '地区：' + (j.area || '未知'),
+    '薪资：' + (j.salary || '未标注'),
+    '经验要求：' + (ee.exp || '未标注'),
+    '学历要求：' + (ee.edu || '未标注'),
+    '技能标签：' + ((j.tags || []).join('、') || '无')
+  ].join('\n');
+}
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
 
 // ── 投递节奏与统计（M2）──
-// 默认按"接近人工、宁可慢"的保守节奏：投递后 45-120 秒、单次上限 8、每日 25；
+// 默认取"稳健提速"节奏：投递后 20-40 秒、发送前 3-6 秒、单次上限 41、每日 60；
 // 另含工作时段限制、每 N 个长休息、验证通过后冷却，均可在侧边栏"运行策略"调整。
 const DEFAULT_PACE = {
-  preSendDelay: [5, 12], postDeliverRest: [45, 120], skipRest: [2, 4],
-  maxPerRun: 8, dailyGoal: 25, pauseOnGoal: true,
+  preSendDelay: [3, 6], postDeliverRest: [20, 40], skipRest: [1, 3],
+  maxPerRun: 41, dailyGoal: 60, pauseOnGoal: true,
   workHours: { enabled: false, start: 9, end: 21 },
-  longBreakEvery: 5, longBreakRest: [180, 600], verifyCooldownMin: 10
+  longBreakEvery: 10, longBreakRest: [60, 150], verifyCooldownMin: 5
 };
 const DEFAULT_STAT_GOAL = { monthly: 300 };
 
@@ -260,13 +337,28 @@ function parseMatch(raw) {
 }
 
 // 筛选：只判断是否值得投（用岗位标签快速判断，不生成招呼语）
+// 严格度可在侧边栏"过滤规则 → AI 筛选严格度"切换；宁缺毋滥/宁多勿漏由用户定
+const SCREEN_SYS = {
+  loose: '你是资深求职助手。请完全依据下面提供的【求职者简历】，判断某个岗位是否值得该求职者投递。\n【判断标准·宽松】只要岗位方向与简历的专业/技能/经历大体相关就保留(match=true)；只有明显无关（如简历是技术岗、岗位却是纯销售/体力/完全跨行）才剔除(match=false)。宁可多留，别漏掉机会。请依据简历本身判断，不要套用任何固定行业或级别。\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"score":0到100的契合度,"reason":"一句话理由","flags":["关键不符点，最多3条，无则空数组"]}',
+  balanced: '你是资深求职助手。请完全依据下面提供的【求职者简历】，判断某个岗位是否值得该求职者投递。\n【判断标准·适中】保留(match=true)：岗位方向与求职者简历的专业/技能/经历相关，且求职者的经验年限、学历、级别够得着该岗位（不超纲）。剔除(match=false)：方向与简历明显无关；岗位要求的经验/学历/硬技能明显超出简历；岗位级别明显高于求职者当前水平。请依据简历本身判断，不要套用任何固定行业或级别。\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"score":0到100的契合度,"reason":"一句话理由","flags":["关键不符点，最多3条，无则空数组"]}',
+  strict: '你是资深求职助手。请完全依据下面提供的【求职者简历】，判断某个岗位是否值得该求职者投递。\n【判断标准·严格】只有岗位方向、核心技能、经验年限、学历要求都与简历明显匹配时才保留(match=true)。出现以下任一情况即剔除(match=false)：方向偏离；岗位要求的硬技能简历里没有；经验年限或学历够不着/明显超纲；岗位级别高于当前水平；职责偏销售/外包/驻场等与简历不符。宁缺毋滥。请依据简历本身判断，不要套用任何固定行业或级别。\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"score":0到100的契合度,"reason":"一句话理由","flags":["关键不符点，最多3条，无则空数组"]}'
+};
+// 契合度 score：0=完全不符，100=高度匹配。模型没给/非法时按 match 兜底一个合理分，保证排序可用
+function normalizeScore(v, match) {
+  let n = parseInt(v, 10);
+  if (!isFinite(n)) n = match ? 70 : 20;
+  return Math.max(0, Math.min(100, n));
+}
 async function screenJob(cfg, job) {
-  const sys = '你是资深求职助手。请完全依据下面提供的【求职者简历】，判断某个岗位是否值得该求职者投递。\n【判断标准·适中】保留(match=true)：岗位方向与求职者简历的专业/技能/经历相关，且求职者的经验年限、学历、级别够得着该岗位（不超纲）。剔除(match=false)：方向与简历明显无关；岗位要求的经验/学历/硬技能明显超出简历；岗位级别明显高于求职者当前水平。请依据简历本身判断，不要套用任何固定行业或级别。\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"reason":"一句话理由"}';
+  const lvl = filterCfg(cfg).screenLevel || 'balanced';
+  const sys = SCREEN_SYS[lvl] || SCREEN_SYS.balanced;
   const user = '求职者简历：\n' + resumeFull(cfg) + '\n\n待判断岗位：\n' + jobInfo(job) + '\n\n严格输出JSON。';
   const raw = await callLLM([{ role: 'system', content: sys }, { role: 'user', content: user }], 4096, { json: true, noThink: true });
   const p = parseMatch(raw);
-  if (!p) return { match: false, reason: 'AI解析失败' };
-  return { match: p.match === true || p.match === 'true', reason: (p.reason || '').toString() };
+  if (!p) return { match: false, reason: 'AI解析失败', score: 0, flags: [] };
+  const match = p.match === true || p.match === 'true';
+  const flags = Array.isArray(p.flags) ? p.flags.map(x => String(x).trim()).filter(Boolean).slice(0, 3) : [];
+  return { match: match, reason: (p.reason || '').toString(), score: normalizeScore(p.score, match), flags: flags };
 }
 
 // ── 招呼语模板：变量 {{岗位}} {{公司}} {{薪资}} {{地区}} {{HR}} {{技能}} {{关键词}} ──
@@ -304,19 +396,31 @@ async function genGreetingFromJD(cfg, job, jd) {
 async function ensureInjected(tabId, file) {
   try { await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['src/selectors.js', file] }); } catch (e) {}
 }
-function sendToTab(tabId, msg) {
+function sendToTab(tabId, msg, timeoutMs) {
+  const ms = timeoutMs || 15000;
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, msg, (resp) => {
-      if (chrome.runtime.lastError) resolve({ success: false, error: chrome.runtime.lastError.message });
-      else resolve(resp || { success: false, error: 'no response' });
-    });
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); };
+    const timer = setTimeout(() => finish({ success: false, error: '页面响应超时（' + Math.round(ms / 1000) + ' 秒无响应）' }), ms);
+    try {
+      chrome.tabs.sendMessage(tabId, msg, (resp) => {
+        if (chrome.runtime.lastError) finish({ success: false, error: chrome.runtime.lastError.message });
+        else finish(resp || { success: false, error: 'no response' });
+      });
+    } catch (e) { finish({ success: false, error: (e && e.message) || String(e) }); }
   });
 }
-function waitTabComplete(tabId) {
+function waitTabComplete(tabId, timeoutMs) {
+  const ms = timeoutMs || 30000;
   return new Promise((resolve) => {
-    function lis(id, info) { if (id === tabId && info.status === 'complete') { chrome.tabs.onUpdated.removeListener(lis); setTimeout(resolve, 1200); } }
+    let done = false, settle = null;
+    const finish = () => { if (done) return; done = true; clearTimeout(timer); if (settle) clearTimeout(settle); chrome.tabs.onUpdated.removeListener(lis); resolve(); };
+    const timer = setTimeout(finish, ms);
+    // 页面 complete 后再给 1.2 秒让渲染稳定；超时则直接放行，避免永久挂起
+    const onComplete = () => { chrome.tabs.onUpdated.removeListener(lis); if (!settle) settle = setTimeout(finish, 1200); };
+    function lis(id, info) { if (id === tabId && info.status === 'complete') onComplete(); }
     chrome.tabs.onUpdated.addListener(lis);
-    chrome.tabs.get(tabId, (t) => { if (t && t.status === 'complete') { chrome.tabs.onUpdated.removeListener(lis); setTimeout(resolve, 1200); } });
+    chrome.tabs.get(tabId, (t) => { if (t && t.status === 'complete') onComplete(); });
   });
 }
 function resolveCity(cfg) {
@@ -372,13 +476,7 @@ async function cooldownAfterVerify() {
   let mins = 0;
   try { const ps = await readPaceAndStats(); mins = ps.pace.verifyCooldownMin || 0; } catch (e) {}
   if (!(mins > 0)) return;
-  log('🧊 安全验证已通过，冷却 ' + mins + ' 分钟后自动继续（可点「停止」取消）', 'warn');
-  // 用有限次 sleep 计时而非 Date.now()：生产环境每次 1 秒共 mins 分钟，测试沙箱定时器被钳制也不会卡死
-  for (let i = 0; i < mins * 60; i++) {
-    if (state.aborted) return;
-    if (state.paused) { await waitIfPaused(); if (state.aborted) return; }
-    await sleep(1000);
-  }
+  await pacedWait(mins * 60 * 1000, '🧊 安全验证已通过，冷却后自动继续（可点「停止」取消）');
 }
 // 验证页等待：返回 true=用户点了停止；false=验证已恢复（或用户关闭了检测）
 async function waitOutVerify(tabId) {
@@ -405,7 +503,7 @@ async function contentReady(tabId, file, timeout) {
   const t0 = Date.now();
   let verifySeen = false; // DOM 检测到过验证组件，恢复后同样要冷却
   for (;;) {
-    const r = await sendToTab(tabId, { type: 'PING' });
+    const r = await sendToTab(tabId, { type: 'PING' }, 4000);
     if (r && r.success) {
       // 页面内出现验证码组件（URL 可能没变）：同样暂停等人工处理
       if (r.verify && verifyGuardOn()) { verifySeen = true; pauseForVerify('页面出现验证码组件'); await waitIfPaused(); if (state.aborted) return false; continue; }
@@ -464,6 +562,7 @@ function curUrl(tabId) { return new Promise(res => chrome.tabs.get(tabId, t => r
 async function runCollect() {
   state.aborted = false; state.paused = false; state.verifyPending = false;
   state.jobs = []; state.screened = []; state.greetings = {}; state.results = [];
+  markRunEnd(); // 新一轮收集作废上一轮未完成的投递任务，避免看门狗误续投
   state.phase = 'collecting'; pushPhase();
   const cfg = await getCfg();
   state.risk = riskOf(cfg);
@@ -523,13 +622,13 @@ async function runCollect() {
       try { res = await screenJob(cfg, job); }
       catch (e) {
         if (/API 40[13]|api key/i.test(String(e.message))) {
-          res = { match: false, reason: 'API 鉴权失败' };
+          res = { match: false, reason: 'API 鉴权失败', score: 0, flags: [] };
           authFail++;
           if (authFail === 1) log('✗ API 鉴权失败（401/403）：接口地址或密钥不对（或订阅额度已用完），请检查第 1 步配置，可点「恢复预设」', 'error');
           if (authFail >= 2) state.aborted = true;
-        } else { res = { match: false, reason: '筛选异常:' + e.message }; }
+        } else { res = { match: false, reason: '筛选异常:' + e.message, score: 0, flags: [] }; }
       }
-      state.screened.push(Object.assign({}, job, { match: res.match, reason: res.reason }));
+      state.screened.push(Object.assign({}, job, { match: res.match, reason: res.reason, score: res.score, flags: res.flags || [] }));
       done++; progress(done, total, '筛选');
     }));
   }
@@ -555,6 +654,7 @@ async function runDeliver(jobIds) {
   state.aborted = false; state.paused = false; state.results = [];
   state.verifyPending = false; state.consecFail = 0;
   state.phase = 'delivering'; pushPhase();
+  markRunStart(jobIds);
   // SW 可能在审核期间被回收，内存丢了就从存储读回
   if (!state.jobs.length) { const d = await chrome.storage.local.get(['sw_jobs', 'sw_greetings']); state.jobs = d.sw_jobs || []; state.greetings = d.sw_greetings || {}; }
   const cfg = await getCfg();
@@ -586,7 +686,7 @@ async function runDeliver(jobIds) {
     return;
   }
   log('本轮配额：' + quota + ' 个（单次上限 ' + pace.maxPerRun + ' · 今日 ' + todayOk0 + '/' + pace.dailyGoal + '）');
-  if (pace.postDeliverRest[0] < 30) log('⚠ 投递间隔低于 30 秒，账号风控风险较高，建议至少 45-120 秒', 'warn');
+  if (pace.postDeliverRest[0] < 15) log('⚠ 投递间隔低于 15 秒，账号风控风险较高，建议至少 20-40 秒', 'warn');
   const searchUrl = buildSearchUrl(cfg);
 
   let deliveredThisRun = 0;
@@ -631,7 +731,7 @@ async function runDeliver(jobIds) {
         state.results.push({ id: job.id, name: job.name, ok: false, msg: fundReason });
         bumpStat('skip');
         progress(k + 1, ids.length, '投递');
-        await rand(pace.skipRest[0] * 1000, pace.skipRest[1] * 1000);
+        await pacedWait(randMs(pace.skipRest), '');
         continue;
       }
     }
@@ -644,7 +744,7 @@ async function runDeliver(jobIds) {
       state.results.push({ id: job.id, name: job.name, ok: false, msg: commuteReason });
       bumpStat('skip');
       progress(k + 1, ids.length, '投递');
-      await rand(pace.skipRest[0] * 1000, pace.skipRest[1] * 1000);
+      await pacedWait(randMs(pace.skipRest), '');
       continue;
     }
 
@@ -655,7 +755,7 @@ async function runDeliver(jobIds) {
       state.results.push({ id: job.id, name: job.name, ok: false, msg: '已投递过同联系人' });
       bumpStat('skip');
       progress(k + 1, ids.length, '投递');
-      await rand(pace.skipRest[0] * 1000, pace.skipRest[1] * 1000);
+      await pacedWait(randMs(pace.skipRest), '');
       continue;
     }
 
@@ -679,7 +779,7 @@ async function runDeliver(jobIds) {
 
     // 3. 点立即沟通 → 继续沟通（跳聊天页），发送前按节奏随机等待
     log('  建立联系（立即沟通 → 继续沟通）...');
-    await rand(pace.preSendDelay[0] * 1000, pace.preSendDelay[1] * 1000);
+    await pacedWait(randMs(pace.preSendDelay), '');
     const gc = await sendToTab(tab.id, { type: 'GO_CHAT', job: job });
     // 平台配额弹窗：当日名额用完，本轮到此为止（继续点只会反复弹窗，且有风控风险）
     if (gc && gc.quota) {
@@ -726,11 +826,11 @@ async function runDeliver(jobIds) {
     } else { failedTrip = recordFail(job, (r && r.error) || '发送失败'); log('  失败：' + (r && r.error), 'error'); }
     progress(k + 1, ids.length, '投递');
     if (failedTrip) { finishDeliver('failstreak'); return; }
-    await rand(pace.postDeliverRest[0] * 1000, pace.postDeliverRest[1] * 1000);
+    await pacedWait(randMs(pace.postDeliverRest), '投递后休息');
     // 长休息：每投 N 个停一段较长时间，避免连续高频批量建联
     if (pace.longBreakEvery > 0 && deliveredThisRun > 0 && deliveredThisRun % pace.longBreakEvery === 0) {
       log('  ☕ 已连续投 ' + deliveredThisRun + ' 个，长休息 ' + pace.longBreakRest[0] + '-' + pace.longBreakRest[1] + ' 秒后再继续', 'info');
-      await rand(pace.longBreakRest[0] * 1000, pace.longBreakRest[1] * 1000);
+      await pacedWait(randMs(pace.longBreakRest), '长休息');
     }
   }
   finishDeliver();
@@ -756,6 +856,7 @@ function recordFail(job, msg) {
   return false;
 }
 function finishDeliver(reason) {
+  markRunEnd();
   statQueue.then(() => {
     const ok = state.results.filter(r => r.ok).length;
     const fail = state.results.length - ok;
@@ -776,6 +877,10 @@ if (self.addEventListener) {
 }
 
 const BUSY_PHASES = { collecting: 1, screening: 1, delivering: 1 };
+// alarms 看门狗：SW 被回收后仍能按周期唤醒，自动续投中断的投递
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener((a) => { if (a && a.name === 'deliverWatchdog') deliverWatchdogTick(); });
+}
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'START_COLLECT') {
     if (BUSY_PHASES[state.phase]) { log('当前正在 ' + state.phase + '，请先点「停止」', 'warn'); sendResponse({ ok: false, error: 'busy' }); return; }
@@ -798,8 +903,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.runtime.sendMessage({ type: 'VERIFY_CLEARED' }).catch(() => {});
     sendResponse({ ok: true }); return;
   }
-  if (msg.type === 'STOP') { state.aborted = true; state.paused = false; log('已停止', 'warn'); state.phase = 'idle'; pushPhase(); sendResponse({ ok: true }); return; }
-  if (msg.type === 'RESET') { state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空本轮已投记录；企业去重记录保留）', 'warn'); sendResponse({ ok: true }); return; }
+  if (msg.type === 'STOP') { state.aborted = true; state.paused = false; markRunEnd(); log('已停止', 'warn'); state.phase = 'idle'; pushPhase(); sendResponse({ ok: true }); return; }
+  if (msg.type === 'RESET') { state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; markRunEnd(); state.phase = 'idle'; pushPhase(); log('已重置（清空本轮已投记录；企业去重记录保留）', 'warn'); sendResponse({ ok: true }); return; }
   if (msg.type === 'GET_STATE') { sendResponse({ phase: state.phase, screened: state.screened }); return; }
   if (msg.type === 'RUN_FILTER_DRY') {
     (async () => {
@@ -897,3 +1002,15 @@ chrome.storage.local.get(['processed', 'filterConfig']).then(r => {
   if (r.processed) state.processed = r.processed;
   if (!r.filterConfig) chrome.storage.local.set({ filterConfig: BPFilters.DEFAULT_FILTER });
 });
+
+// SW 启动（含被回收后重启）时：若上一轮投递任务仍在存盘中，补挂看门狗并尝试续投
+chrome.storage.local.get('deliverRun').then(r => {
+  const run = r && r.deliverRun;
+  if (!run || !run.active) return;
+  if (Date.now() - (run.at || 0) > RUN_MAX_AGE_MS) {
+    chrome.storage.local.set({ deliverRun: { jobIds: [], active: false, at: Date.now() } });
+    return;
+  }
+  try { if (chrome.alarms) chrome.alarms.create('deliverWatchdog', { periodInMinutes: 1 }); } catch (e) {}
+  deliverWatchdogTick();
+}).catch(() => {});

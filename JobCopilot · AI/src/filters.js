@@ -13,6 +13,8 @@
     inviteMax: 0,
     kwMode: 'off',
     keywords: [],
+    hardExclude: [],
+    screenLevel: 'balanced',
     skipUsdFund: false,
     fundMin: 0,
     commute: { enabled: false, key: '', origin: '', driveMaxKm: 0, driveMaxMin: 0, walkMaxKm: 0, walkMaxMin: 0 },
@@ -36,6 +38,8 @@
     c.cities = toList(c.cities);
     c.addrExclude = toList(c.addrExclude);
     c.keywords = toList(c.keywords);
+    c.hardExclude = toList(c.hardExclude);
+    c.screenLevel = ['loose', 'balanced', 'strict'].indexOf(c.screenLevel) >= 0 ? c.screenLevel : 'balanced';
     c.inviteMax = Number(c.inviteMax) || 0;
     c.fundMin = Number(c.fundMin) || 0;
     c.skipUsdFund = !!c.skipUsdFund;
@@ -152,6 +156,11 @@
       return '邀请量过高（' + j.inviteCount + '）';
     }
     const hay = (String(j.name || '') + ' ' + (j.tags || []).join(' ')).toLowerCase();
+    // 硬排除：命中即剔除，不进入 AI 筛选（省一次调用、也更果断）
+    if (c.hardExclude.length) {
+      const hit = c.hardExclude.find(k => hay.indexOf(String(k).toLowerCase()) >= 0);
+      if (hit) return '硬排除命中（' + hit + '）';
+    }
     if (c.keywords.length) {
       if (c.kwMode === 'include' && !c.keywords.some(k => hay.indexOf(k.toLowerCase()) >= 0)) return '关键词不含';
       if (c.kwMode === 'exclude' && c.keywords.some(k => hay.indexOf(k.toLowerCase()) >= 0)) return '关键词排除';

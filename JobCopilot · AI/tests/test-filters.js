@@ -68,6 +68,23 @@ define('filters.js 过滤引擎', t => {
     const fr = F.applyFilters(jobs, { kwMode: 'exclude', keywords: ['销售'] });
     assert.ok(!fr.kept.some(j => j.id === 2));
   });
+  t('硬排除词命中即剔除（岗位名/标签）', () => {
+    const list = [
+      { id: 1, name: '猎头助理实习', company: 'A', tags: ['招聘'] },
+      { id: 2, name: '电话销售', company: 'B', tags: [] },
+      { id: 3, name: '数据分析师', company: 'C', tags: ['外包'] }
+    ];
+    const fr = F.applyFilters(list, { hardExclude: ['销售', '外包'] });
+    assert.deepStrictEqual(fr.kept.map(j => j.id), [1]);
+    assert.ok(fr.dropped.every(j => /硬排除命中/.test(j._dropReason)));
+  });
+  t('硬排除词默认空、screenLevel 默认 balanced', () => {
+    const c = F.normalize({});
+    assert.deepStrictEqual(c.hardExclude, []);
+    assert.strictEqual(c.screenLevel, 'balanced');
+    assert.strictEqual(F.normalize({ screenLevel: 'xxx' }).screenLevel, 'balanced');
+    assert.strictEqual(F.normalize({ screenLevel: 'strict' }).screenLevel, 'strict');
+  });
   t('城市不符剔除', () => {
     const fr = F.applyFilters([jobs[2]], { cities: ['北京'] });
     assert.ok(fr.dropped.length === 1 && fr.dropped[0]._dropReason.indexOf('城市不符') === 0);

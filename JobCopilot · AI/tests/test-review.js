@@ -54,8 +54,8 @@ function setup(opts) {
   for (const k of Object.keys(effCfg)) chrome._storageData.set(k, JSON.parse(JSON.stringify(effCfg[k])));
   if (opts.setupChrome) opts.setupChrome(chrome);
   const fetch_ = opts.fetch || llmFetchQueue(opts.llm || [MATCH_JSON, GREETING]);
-  loadSW(chrome, fetch_);
-  return { chrome, fetch: fetch_ };
+  const sw = loadSW(chrome, fetch_);
+  return { chrome, fetch: fetch_, sw };
 }
 
 async function collectToReview(chrome) {
@@ -588,6 +588,84 @@ define('review 针对性测试', t => {
     for (const o of ['*://*.zhipin.com/*', 'https://api.deepseek.com/*', 'https://opencode.ai/*', 'https://open.bigmodel.cn/*', 'https://restapi.amap.com/*']) {
       assert.ok(hp.indexOf(o) >= 0, '缺少 host_permission: ' + o);
     }
+    assert.ok((m.permissions || []).indexOf('alarms') >= 0, '应声明 alarms 权限（看门狗自动续投）');
+  });
+
+  t('AI 筛选富化：岗位画像含地区/经验/学历，严格度写入 prompt（回归）', async () => {
+    const { chrome, fetch } = setup({
+      jobs: [{ id: 'J1', name: '数据分析师', salary: '10-15K', company: '某公司', tags: ['1-3年', '本科', 'SQL'], area: '广州·天河区' }],
+      cfg: baseCfg({ screenLevel: 'strict' }),
+      llm: [MATCH_JSON]
+    });
+    await collectToReview(chrome);
+    const body = fetch._calls[fetch._calls.length - 1];
+    const prompt = JSON.stringify(body.messages);
+    assert.ok(prompt.indexOf('地区：广州') >= 0, '应含地区：' + prompt);
+    assert.ok(prompt.indexOf('经验要求：1-3年') >= 0, '应含经验要求');
+    assert.ok(prompt.indexOf('学历要求：本科') >= 0, '应含学历要求');
+    assert.ok(prompt.indexOf('严格') >= 0, '严格档应写入 prompt');
+  });
+
+  t('AI 打分：screened 带 score/flags（回归）', async () => {
+    const { chrome } = setup({
+      jobs: [{ id: 'J1', name: '数据分析师', salary: '10-15K', company: '某公司', tags: ['SQL'], area: '广州' }],
+      llm: ['{"match":true,"score":88,"reason":"很匹配","flags":["经验略超"]}']
+    });
+    await collectToReview(chrome);
+    const s = await chrome.panelSend({ type: 'GET_STATE' });
+    assert.strictEqual(s.screened[0].score, 88);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(s.screened[0].flags)), ['经验略超']);
+  });
+
+  t('AI 打分：模型没给 score 时按 match 兜底（回归）', async () => {
+    const { chrome } = setup({
+      jobs: [{ id: 'J1', name: '数据分析师', salary: '10-15K', company: '某公司', tags: [], area: '广州' }],
+      llm: ['{"match":true,"reason":"还行"}']
+    });
+    await collectToReview(chrome);
+    const s = await chrome.panelSend({ type: 'GET_STATE' });
+    assert.strictEqual(s.screened[0].score, 70, '缺省 score 应兜底为 70');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(s.screened[0].flags)), []);
+  });
+
+  t('sendToTab：页面无响应时超时返回失败，不永久挂起（回归）', async () => {
+    const { chrome, sw } = setup({});
+    chrome.tabs.sendMessage = () => {}; // 永不回调，模拟 content script 丢失
+    const r = await sw.sendToTab(1, { type: 'PING' }, 50);
+    assert.strictEqual(r.success, false);
+    assert.ok(/超时/.test(r.error), '应返回超时：' + r.error);
+  });
+
+  t('waitTabComplete：标签页始终不完成时超时返回，不永久挂起（回归）', async () => {
+    const { chrome, sw } = setup({});
+    chrome.tabs.get = (id, cb) => cb({ id, status: 'loading' });
+    const t0 = Date.now();
+    await sw.waitTabComplete(1, 40);
+    assert.ok(Date.now() - t0 < 2000, '应在超时内返回');
+  });
+
+  t('看门狗：心跳陈旧且后台空闲时自动续投剩余岗位（回归）', async () => {
+    const { chrome, sw } = setup({});
+    await collectToReview(chrome); // 填充 sw_jobs
+    await chrome.storage.local.set({ deliverRun: { jobIds: ['J1'], active: true, at: Date.now() - 200000 } });
+    await sw.deliverWatchdogTick();
+    assert.ok(chrome.runtime._runtimeMessages.some(m => m.type === 'LOG' && /自动继续/.test(m.text)), '应有自动续投日志');
+  });
+
+  t('看门狗：心跳新鲜时不打扰（回归）', async () => {
+    const { chrome, sw } = setup({});
+    await chrome.storage.local.set({ deliverRun: { jobIds: ['J1'], active: true, at: Date.now() } });
+    await sw.deliverWatchdogTick();
+    assert.ok(!chrome.runtime._runtimeMessages.some(m => m.type === 'LOG' && /自动继续/.test(m.text)), '不应自动续投');
+  });
+
+  t('看门狗：陈旧任务超过上限不再自动续投（回归）', async () => {
+    const { chrome, sw } = setup({});
+    await chrome.storage.local.set({ deliverRun: { jobIds: ['J1'], active: true, at: Date.now() - 60 * 60 * 1000 } });
+    await sw.deliverWatchdogTick();
+    assert.ok(!chrome.runtime._runtimeMessages.some(m => m.type === 'LOG' && /自动继续/.test(m.text)), '过期任务不应续投');
+    const d = await chrome.storage.local.get('deliverRun');
+    assert.strictEqual(d.deliverRun.active, false, '过期任务应标记为结束');
   });
 
   t('专用标签页：SW 重启后从 storage.session 复用，不重复新建（回归）', async () => {

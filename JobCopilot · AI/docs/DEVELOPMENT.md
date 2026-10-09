@@ -262,7 +262,7 @@ const DEFAULT_FILTER = { listMode:'off', blacklist:[], whitelist:[], salary:{min
 
 ```bash
 cd "JobCopilot · AI"
-node tests/run-all.js          # 全部 Node 层测试（~69 用例，约 10s）
+node tests/run-all.js          # 全部 Node 层测试（~144 用例，约 15s）
 node tests/run-all.js 过滤引擎  # 只跑某个套件（子串匹配）
 node tests/smoke-edge.js       # 真实 Edge 冒烟测试（headless，独立临时配置，不碰用户浏览器）
 ```
